@@ -1,238 +1,299 @@
 
 
+# to do:
+# preprocess raster stacks to avoid having to use stackBands
+
+
+
 library(shiny)
-library(htmlwidgets)
+library(rintrojs)
+library(shinyalert)
 library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(leaflet)
 library(raster)
-library(geosphere)
-library(caret)
 library(grid)
+library(ecoclim)
 select <- dplyr::select
 extract <- raster::extract
 
 
-# load data
-d <- readRDS("../assets/seedsource_data/species_data.rds")
-rsoil <- stack("../assets/seedsource_data/soil.tif")
-clim_files <- list.files("../assets/seedsource_data/", pattern="climate", full.names=T)
-clim <- lapply(clim_files, stack)
+# climate metadata
+vars <- sort(c("PPT", "AET", "CWD", "DJF", "JJA"))
+clim_files <- data.frame(path=list.files("../assets/seedsource_data",
+                                         full.names=T, pattern="ensemble"),
+                         stringsAsFactors=F) %>%
+      mutate(set=gsub("\\.tif", "", basename(path))) %>%
+      separate(set, c("junk", "year", "var"), remove=F, sep=" ") %>%
+      select(-junk) %>%
+      filter(var %in% vars) %>% arrange(var)
+
+spps <- list.files("../assets/seedsource_data/ranges") %>% sub("\\.rds", "", .)
+
+soil_all <- stack("../assets/seedsource_data/soil_800m.tif")
 
 
-vars <- data.frame(abbv=c("geo_dist", "env_dist_t1", 
-                          "climPC1", "climPC2", "climPC3", 
-                          "soilPC1", "soilPC2", "soilPC3"),
-                   description=c("Geographic distance", "Environmental dissimilarity",
-                                 "Climate PC1", "Climate PC2", "Climate PC3",
-                                 "Soil PC1", "Soil PC2", "Soil PC3"),
-                   stringsAsFactors = F)
+
+ll <- crs("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+all_vars <- c(vars, paste0("soil_PC", 1:5), "clim_prob", "soil_prob", "prob")
+
 
 
 ui <- fluidPage(
-  
-  titlePanel("Predictive provenancing"),
-  
-  fluidRow(
-    column(2, strong(p("Double-click map to select planting site"))),
-    column(2, selectizeInput("sp", "Focal\nspecies", d$spp)),
-    column(3, sliderInput("pclim", "Climate importance (vs. soil)", min=0, max=100, value=50, post="%", width="100%")),
-    column(3, sliderInput("radius", "Homogenization radius", min=0, max=200, value=25, post="km", width="100%")),
-    column(2, selectInput("color_var", "Point color", vars$description, "Environmental dissimilarity"))
-  ),
-  
-  fluidRow(
-    tags$head(tags$style(".shiny-plot-output{height:80vh !important;}")),
-    column(4, 
-           plotOutput("map", dblclick="map_dblclick", brush="map_brush")),
-    column(4, 
-           plotOutput("env_scatter", brush="env_brush"),
-           fluidRow(
-             column(6, selectInput("env_xvar", "x-axis variable", vars$description[grepl("PC", vars$abbv)], "Climate PC1")),
-             column(6, selectInput("env_yvar", "y-axis variable", vars$description[grepl("PC", vars$abbv)], "Soil PC1")))),
-    column(4, 
-           plotOutput("dist_scatter", brush="dist_brush")    )#,
-    #fluidRow(
-    #      column(6, selectInput("dist_xvar", "x-axis variable", vars, "geo_dist")),
-    #     column(6, selectInput("dist_yvar", "y-axis variable", vars, "env_dist1")))),
-    
-  )
-  
+      
+      useShinyalert(),
+      
+      column(3,
+             br(),
+             tags$img(src="logo2.png", width="50%", align="left"),
+             br(),
+             br(),
+             br(),
+             br(),
+             br(),
+             
+             #fluidRow(column(10, selectizeInput("sp", "Focal species", spps)), 
+             #         column(1, h1(" "), actionButton("i_species", "?"))),
+             selectizeInput("sp", "Focal species", spps),
+             
+             shinyWidgets::sliderTextInput("radius", "Homogenization radius (km)",
+                                           choices=c(0, 1, 2, 5, 10, 20, 50, 100), selected=5,
+                                           grid = T),
+             
+             selectInput("time", "Target era", c("2041-2060", "2061-2080"), "2061-2080"),
+             
+             selectInput("climstat", "Climate similarity basis", c("GCM ensemble", "species niche"), "GCM ensemble"),
+             
+             sliderInput("pclim", "Climate importance (vs. soil)",
+                         min=0, max=1, value=.5, width="100%"),
+             
+             selectizeInput("color", "Color variable", all_vars, "prob"),
+             br(),
+             plotOutput("scatter", height=300),
+             selectizeInput("xvar", "x variable", vars, "PPT"),
+             selectizeInput("yvar", "y variable", vars, "JJA")
+      ),
+      column(9,
+             leafletOutput("map", height=1000)
+      )
 )
 
 
-server <- function(input, output) {
-  
-  # default restoration site location: presidio
-  s <- data.frame(species=NA, lat=37.801064, lon=-122.478557)
-  coordinates(s) <- c("lon", "lat")
-  crs(s) <- crs(d$jeps)
-  site <- reactiveValues(point = s)
-  
-  # update location when map is clicked
-  observeEvent(input$map_dblclick, {
-    s <- data.frame(species=NA, lat=input$map_dblclick$y, lon=input$map_dblclick$x)
-    coordinates(s) <- c("lon", "lat")
-    crs(s) <- crs(d$jeps)
-    site$point <- s
-  })
-  
-  site_clim <- reactive({ lapply(clim, extract, y=site$point) }) # slow
-  
-  data <- reactive({
-    
-    # geographic distances from restoration site
-    j <- d$jeps[d$jeps$species==input$sp,]
-    gdist <- as.vector(distm(site$point, j))
-    
-    # climate and soil data across species range
-    jc <- d$jeps_clim[d$jeps$species==input$sp,]
-    js <- d$jeps_soil[d$jeps$species==input$sp,]
-    
-    # climate and soils data for restoration site
-    sc <- lapply(site_clim(), function(x){colnames(x) <- colnames(jc); return(x)})
-    ss <- extract(rsoil, site$point)
-    colnames(ss) <- colnames(js)
-    
-    # 3 climate PCs
-    ctrans <- preProcess(jc, c("center", "scale", "pca"), pcaComp=3)
-    tag <- function(d, tag){colnames(d) <- paste0(tag, colnames(d)); return(d)}
-    sc <- lapply(sc, function(x) predict(ctrans, x) %>% tag("clim"))
-    jc <- predict(ctrans, jc) %>% tag("clim")
-    
-    # 3 soil PCs
-    strans <- preProcess(js, c("center", "scale", "pca"), pcaComp=3)
-    ss <- predict(strans, ss) %>% tag("soil")
-    js <- predict(strans, js) %>% tag("soil")
-    
-    # combine soil and climate data
-    je <- cbind(jc, js)
-    se <- lapply(sc, function(x) cbind(x, ss))
-    
-    # spatial smoothing to represent homogenizing gene flow
-    if(input$radius > 0){
-      dists <- distm(j) %>% as.matrix()
-      je <- lapply(1:nrow(dists), function(i){
-        jx <- je[which(dists[i,] <= input$radius*1000),]
-        if(is.null(nrow(jx))) return(jx)
-        as.data.frame(jx) %>% summarize_all(mean, na.rm=T)}) %>%
-        do.call("rbind", .)
-    }
-    
-    # apply climate:soil weights
-    jeb <- je # keep an unweighted copy
-    if(input$pclim != 50){
-      je[,1:3] <- je[,1:3] * input$pclim / 50
-      je[,4:6] <- je[,4:6] * (100 - input$pclim) / 50
-    }
-    
-    # environmental distances
-    edist <- lapply(se, function(x){
-      rbind(x, je) %>% dist() %>% as.matrix() %>% "["((2:nrow(.)), 1) }) %>%
-      do.call("cbind", .)
-    colnames(edist) <- paste0("env_dist_t", 1:ncol(edist))
-    
-    # convert to data frames for plotting
-    jd <- as.data.frame(j) %>%
-      mutate(geo_dist = gdist/1000) %>%
-      cbind(edist) %>%
-      cbind(jeb) %>% # jeb
-      mutate(type="restoration",
-             env_dist_t1_rank=rank(env_dist_t1))
-    
-    return(list(jd=jd,
-                je=je,
-                se=se))
-  })
-  
-  
-  # convert variable descriptions to abbreviations
-  col_var <- reactive({vars$abbv[vars$description==input$color_var]})
-  env_xvar <- reactive({vars$abbv[vars$description==input$env_xvar]})
-  env_yvar <- reactive({vars$abbv[vars$description==input$env_yvar]})
-  
-  
-  # brushed data selection
-  brushed <- reactiveValues(data = data.frame(latitude=0, longitude=0, env_dist_t1=0, geo_dist=0,
-                                              climPC1=0, climPC2=0, climPC3=0, 
-                                              soilPC1=0, soilPC2=0, soilPC3=0)[0,])
-  observeEvent(input$map_brush, {
-    brushed$data <- brushedPoints(data()$jd, input$map_brush,
-                                  xvar="longitude", yvar="latitude")})
-  observeEvent(input$dist_brush, {
-    brushed$data <- brushedPoints(data()$jd, input$dist_brush,
-                                  xvar="geo_dist", yvar="env_dist_t1")})
-  observeEvent(input$env_brush, {
-    brushed$data <- brushedPoints(data()$jd, input$env_brush,
-                                  xvar=env_xvar(), yvar=env_yvar())})
-  
-  data_clr <- reactive({
-    data <- data()
-    data$jd <- data$jd %>% 
-      mutate_(clr = col_var()) %>%
-      mutate(clr=ecdf(clr)(clr))
-    return(data)
-  })
-  
-  output$map <- renderPlot({
-    sd <- as.data.frame(site$point)
-    ggplot() + 
-      geom_polygon(data=d$md, aes(long, lat, group=group), fill="gray90") +
-      geom_point(data=data_clr()$jd, aes_string("longitude", "latitude", color="clr")) +
-      geom_point(data=brushed$data, aes(longitude, latitude), color="orange") +
-      geom_point(data=sd, aes(lon, lat), color="magenta", shape=10, size=5) +
-      scale_color_viridis_c() +
-      theme_void() +
-      theme(legend.position="none") +
-      coord_fixed(ratio=1.2)
-  })
-  
-  output$dist_scatter <- renderPlot({
-    ggplot() + 
-      geom_point(data=data_clr()$jd, aes_string("geo_dist", "env_dist_t1", color="clr")) +
-      geom_point(data=brushed$data, aes_string("geo_dist", "env_dist_t1"), color="orange") +
-      annotate(geom="point", x=0, y=0, color="magenta", shape=10, size=5) +
-      scale_x_log10() +
-      scale_color_viridis_c() +
-      theme_minimal() +
-      theme(legend.position="none") +
-      labs(x="geographic distance (km)",
-           y="environmental dissimilarity (climate and soil)")
-  })
-  
-  output$env_scatter <- renderPlot({
-    
-    se <- data()$se %>%
-      do.call("rbind", .) %>%
-      as.data.frame() %>%
-      mutate(metadata=basename(clim_files),
-             metadata=sub("climate ", "", metadata),
-             metadata=sub("\\.tif", "", metadata),
-             timeframe=substr(metadata, 1, 9),
-             model=substr(metadata, 11, nchar(metadata)-6),
-             scenario=substr(metadata, nchar(metadata)-4, nchar(metadata)),
-             group=paste(model, scenario))
-    sh <- filter(se, timeframe=="1979-2013") %>%
-      select(-metadata, -model, -scenario, -group)
-    sf <- filter(se, timeframe=="2041-2060") %>%
-      mutate(timeframe="1979-2013") %>%
-      select(metadata, timeframe, model, scenario, group) %>%
-      full_join(sh, .)
-    se <- rbind(se, sf) %>%
-      arrange(group, timeframe)
-    
-    
-    ggplot() + 
-      geom_point(data=data_clr()$jd, aes_string(env_xvar(), env_yvar(), color="clr")) +
-      geom_point(data=brushed$data, aes_string(env_xvar(), env_yvar()), color="orange") +
-      geom_path(data=se, aes_string(env_xvar(), env_yvar(), group="group", order="timeframe"), color="magenta") +
-      geom_point(data=se, aes_string(env_xvar(), env_yvar()), color="magenta") +
-      scale_color_viridis_c() +
-      theme_minimal() +
-      theme(legend.position="none") +
-      labs(x=input$env_xvar,
-           y=input$env_yvar)
-  })
+server <- function(input, output, session) {
+      
+      observeEvent(input$i_species, {
+            shinyalert("Select a species", "This will load the geographic range map", type="info")
+      })
+      
+      
+      
+      
+      # default restoration site location: presidio
+      s <- data.frame(species=NA, lat=37.801064, lon=-122.478557)
+      coordinates(s) <- c("lon", "lat")
+      crs(s) <- ll
+      site <- reactiveValues(point = s)
+      
+      
+      
+      # update location when map is clicked
+      observeEvent(input$map_click, {
+            s <- data.frame(species=NA, lat=input$map_click$lat, lon=input$map_click$lng)
+            coordinates(s) <- c("lon", "lat")
+            crs(s) <- ll
+            site$point <- s
+      })
+      
+      
+      # future environment at planting site
+      site_future <- reactive({
+            time <- input$time
+            
+            clim_mean <- stackBands(clim_files$path[clim_files$year==time], 1) %>% extract(site$point) %>% as.vector()
+            clim_sd <- stackBands(clim_files$path[clim_files$year==time], 2) %>% extract(site$point) %>% as.vector()
+            names(clim_mean) <- names(clim_sd) <- vars
+            nclimdim <- length(clim_mean)
+            
+            soil_mean <- extract(soil_all, site$point)
+            colnames(soil_mean) <- paste0("soil_PC", 1:ncol(soil_mean))
+            nsoildim <- length(soil_mean)
+            
+            list(clim_mean = clim_mean,
+                 clim_sd = clim_sd,
+                 clim_ndim = nclimdim,
+                 soil_mean = soil_mean,
+                 soil_ndim = nsoildim)
+      })
+      
+      # historic environments across species range
+      species_envt <- reactive({
+            range <- readRDS(paste0("../assets/seedsource_data/ranges/", input$sp, ".rds"))
+            
+            clim <- stackBands(clim_files$path[clim_files$year=="1979-2013"], 1)
+            names(clim) <- vars
+            #clim_hist <- extract(clim, site$point) %>% as.vector() ########## problem for siloing ######
+            range <- crop(range, clim)
+            clim <- clim %>% crop(range) %>% mask(range) %>% trim()
+            
+            soil <- soil_all %>% mask(range) %>% trim()
+            
+            list(soil = crop(soil, clim),
+                 clim = crop(clim, soil))
+      })
+      
+      # smoothed historic environment representing gene flow
+      smoothed_envt <- reactive({
+            radius <- input$radius
+            w <- matrix(1, 1+radius*2, 1+radius*2)
+            center <- length(w) / 2 + .5
+            
+            m <- function(x, ...){
+                  if(is.na(x[center])) return(NA)
+                  mean(na.omit(x))
+            }
+            
+            clim <- species_envt()$clim
+            soil <- species_envt()$soil
+            
+            if(radius>0){
+                  for(i in 1:nlayers(clim)){
+                        clim[[i]] <- focal(clim[[i]], w=w, fun=m) %>%
+                              mask(clim[[1]])
+                  }
+                  for(i in 1:nlayers(soil)){
+                        soil[[i]] <- focal(soil[[i]], w=w, fun=m) %>%
+                              mask(soil[[1]])
+                  }
+            }
+            
+            list(soil = soil,
+                 clim = clim)
+      })
+      
+      # climate and soil differences between source populations and future planting site 
+      sigmas <- reactive({
+            
+            # for every cell in species range, stdevs between historic clim and planting site future
+            # (convert to probability and then sigma, correcting for dimensionality using chi sq distribution)
+            sed <- function(x, ...){
+                  if(is.na(x[1])) return(NA)
+                  sum((x - site_future()$clim_mean)^2 / site_future()$clim_sd^2)# SED ^ 2
+            }
+            sigma <- function(x, ...){
+                  if(is.na(x[1])) return(NA)
+                  pchisq(x, site_future()$clim_ndim) %>% qchisq(1) %>% sqrt()
+            }
+            clim_prob <- calc(smoothed_envt()$clim, sed) %>% mask(smoothed_envt()$clim[[1]])
+            clim_prob <- calc(clim_prob, sigma)
+            clim_prob <- reclassify(clim_prob, c(10, Inf, 10))
+            
+            # for every cell in range, difference in soil, corrected for dimensionality
+            sed <- function(x, ...){
+                  if(is.na(x[1])) return(NA)
+                  sum((x - site_future()$soil_mean)^2)# SED ^ 2
+            }
+            sigma <- function(x, ...){
+                  if(is.na(x[1])) return(NA)
+                  pchisq(x, site_future()$soil_ndim) %>% qchisq(1) %>% sqrt()
+            }
+            soil_prob <- calc(smoothed_envt()$soil, sed) %>% mask(smoothed_envt()$soil[[1]])
+            soil_prob <- calc(soil_prob, sigma)
+            soil_prob <- reclassify(soil_prob, c(10, Inf, 10))
+            
+            
+            list(soil = soil_prob,
+                 clim = clim_prob)
+      })
+      
+      # overall dissimilarity combining soil and climate
+      final <- reactive({
+            
+            prob <- (sigmas()$clim * input$pclim) + (sigmas()$soil * (1-input$pclim))
+            
+            d <- stack(smoothed_envt()$clim, smoothed_envt()$soil, 
+                       sigmas()$clim, sigmas()$soil, prob)
+            names(d) <- all_vars
+            
+            #cd <- rbind(clim_hist, clim_mean, clim_sd)
+            
+            list(rasters=d)#,
+            #site_clim=cd,
+            #site_soil=soil_mean)
+      })
+      
+      
+      
+      
+      colors <- c("red", "yellow", "seagreen1", "blue", "darkblue", "black")
+      
+      icon <- makeAwesomeIcon("leaf", markerColor="red")
+      
+      output$map <- renderLeaflet({
+            
+            r <- final()$rasters[[input$color]]
+            
+            pal <- colorNumeric(colors,
+                                c(0, values(r)),
+                                na.color = "transparent")
+            
+            latlon <- coordinates(site$point)
+            
+            #Stamen.TonerBackground
+            #Esri.WorldTerrain
+            #Esri.WorldGrayCanvas
+            leaflet() %>%
+                  setView(lng=latlon[1], lat=latlon[2], zoom=10) %>%
+                  addProviderTiles(providers$Esri.WorldGrayCanvas) %>%
+                  addRasterImage(r, colors=pal, opacity=0.8) %>%
+                  addAwesomeMarkers(lng=latlon[1], lat=latlon[2], icon=icon) %>%
+                  addLegend(pal=pal, values=c(0, values(r)),
+                            opacity=0.8, title="Sigma")
+            
+            
+      })
+      
+      output$scatter <- renderPlot({
+            
+            vx <- input$xvar
+            vy <- input$yvar
+            
+            d <- final()$rasters[[c(vx, vy, "prob")]] %>%
+                  rasterToPoints() %>% as.data.frame() %>%
+                  #arrange(desc(prob)) %>%
+                  na.omit()
+            names(d)[3:4] <- c("xvar", "yvar")
+            
+            #clim_sd <- final()$site_clim["clim_sd",]
+            #clim_mean <- final()$site_clim["clim_mean",]
+            #clim_h <- final()$site_clim["clim_hist",]
+            #soil_mean <- final()$site_soil
+            
+            fill_col <- NA
+            
+            ggplot() +
+                  geom_point(data=d, aes(xvar, yvar, color=prob), size=.5) +
+                  scale_color_gradientn(colours=colors, limits=c(0, NA)) +
+                  #annotate("polygon", color="red", fill=fill_col, alpha=.1,
+                  #         x=clim_mean[vx] + clim_sd[vx] * cos(seq(0,2*pi,length.out=100)),
+                  #         y=clim_mean[vy] + clim_sd[vy] * sin(seq(0,2*pi,length.out=100))) +
+                  #annotate("polygon", color="red", fill=fill_col, alpha=.1,
+                  #         x=clim_mean[vx] + clim_sd[vx]*2 * cos(seq(0,2*pi,length.out=100)),
+                  #         y=clim_mean[vy] + clim_sd[vy]*2 * sin(seq(0,2*pi,length.out=100))) +
+                  #annotate("polygon", color="red", fill=fill_col, alpha=.1,
+                  #         x=clim_mean[vx] + clim_sd[vx]*3 * cos(seq(0,2*pi,length.out=100)),
+                  #         y=clim_mean[vy] + clim_sd[vy]*3 * sin(seq(0,2*pi,length.out=100))) +
+                  #annotate("segment", color="red",
+                  #         x=clim_h[vx], y=clim_h[vy], xend=clim_mean[vx], yend=clim_mean[vy],
+            #         arrow=grid::arrow(type="closed", angle=15, length=unit(.15, "in"))) +
+            theme_minimal() +
+                  theme(legend.position="none") +
+                  labs(x=vx, y=vy)
+      })
+      
 }
 
-# Run the application 
+# Run the application
 shinyApp(ui = ui, server = server)
 
