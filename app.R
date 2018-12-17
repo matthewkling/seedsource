@@ -2,7 +2,9 @@
 
 # to do:
 # preprocess raster stacks to avoid having to use stackBands
-
+# pre-load an initial set of results
+# add option to plot suitability based on species niche rather than local adaptation?
+# fix color ramp
 
 
 library(shiny)
@@ -54,19 +56,19 @@ ui <- fluidPage(
              br(),
              br(),
              
-             #fluidRow(column(10, selectizeInput("sp", "Focal species", spps)), 
-             #         column(1, h1(" "), actionButton("i_species", "?"))),
-             selectizeInput("sp", "Focal species", spps),
+             selectizeInput("sp", span("Focal species ", actionLink("i_species", "[?]")), spps),
              
-             shinyWidgets::sliderTextInput("radius", "Homogenization radius (km)",
+             shinyWidgets::sliderTextInput("radius", span("Neighborhood radius (km) ", actionLink("i_radius", "[?]")),
                                            choices=c(0, 1, 2, 5, 10, 20, 50, 100), selected=5,
                                            grid = T),
              
-             selectInput("time", "Target era", c("2041-2060", "2061-2080"), "2061-2080"),
+             selectInput("time", span("Target era", actionLink("i_time", "[?]")), 
+                         c("2041-2060", "2061-2080"), "2061-2080"),
              
-             selectInput("climstat", "Climate similarity basis", c("GCM ensemble", "species niche"), "GCM ensemble"),
+             selectInput("climstat", span("Climatic similarity basis", actionLink("i_basis", "[?]")), 
+                         c("GCM ensemble", "species niche"), "GCM ensemble"),
              
-             sliderInput("pclim", "Climate importance (vs. soil)",
+             sliderInput("pclim", span("Climate importance (vs. soil)", actionLink("i_weight", "[?]")),
                          min=0, max=1, value=.5, width="100%"),
              
              selectizeInput("color", "Color variable", all_vars, "prob"),
@@ -83,22 +85,61 @@ ui <- fluidPage(
 
 server <- function(input, output, session) {
       
-      observeEvent(input$i_species, {
-            shinyalert("Select a species", "This will load the geographic range map", type="info")
-      })
+      showModal(modalDialog(
+            title="Seeds of Change",
+            "Welcome. This tool is a prototype and still under development.",
+            "It's aimed at helping to identify populations that may be suitable as seed sources for ecological restoration projects,",
+            "incorporating data on species ranges, soil variation, and future climate change.",
+            easyClose = TRUE, footer = NULL
+      ))
+      
+      observeEvent(input$i_species, 
+                   {showModal(modalDialog(
+                         title="Species range maps",
+                         "The tool comes pre-loaded with geographic range maps for more than 5200 species of California native plants.",
+                         "Select a species to load its estimated California geographic range, which is based on climate, distance to known observations, and landscape intactness.",
+                         "We'll use the map to estimate the species' environmental tolerance, model gene flow among nearby populations, and hypothesize which populations will have suitable genetics for the planting site.",
+                         easyClose = TRUE, footer = NULL )) })
+      observeEvent(input$i_radius, 
+                   {showModal(modalDialog(
+                         title="Incorporating gene flow",
+                         "A source population's suitability as a genetic match for a planting site with the same environment depends on the population's historic balance between selection and gene flow.",
+                         "The relative importance of gene swamping versus local adaptation is known to vary among species.",
+                         "This parameter lets you set the size of the local neighborhood around each source population within which gene flow is expected to homogenize local adaptation.",
+                         "Choose a small smoothing radius to model highly localized adaptation, or a large radius to model strong effects of widespread gene flow relative to local selection.",
+                         easyClose = TRUE, footer = NULL )) })
+      observeEvent(input$i_time, 
+                   {showModal(modalDialog(
+                         title="Climate change is a moving target",
+                         "This tool estimates how well the historic adaptive environment at each provenance site matches the projected future environment at the planting site.",
+                         "For which future planting site time period would you like to estimate historic climatic similarity?",
+                         easyClose = TRUE, footer = NULL )) })
+      observeEvent(input$i_basis, 
+                   {showModal(modalDialog(
+                         title="Climate distance metric",
+                         "The climatic difference 'sigma' between the planting site and each source population is expressed as a number of standard deviations.", 
+                         "You can select whether this is based on variation among climate models, in which case sigma reflects the likelihood of a future climate match,",
+                         "or on variation across the species California range, in which case sigma reflects difference in terms of realized niche breadth.",
+                         "(Note that soil similarity is always calculated using the range method.)",
+                         easyClose = TRUE, footer = NULL )) })
+      observeEvent(input$i_weight, 
+                   {showModal(modalDialog(
+                         title="Climate versus soil",
+                         "By default soil and climate are given equal weight when calculating similarity to the planting site environment.", 
+                         "Adjust this slder to incorporate species-specific knowledge about their relative importance in shaping local adaptation,",
+                         "or to explore how the results change based on assumptions about their importance.",
+                         easyClose = TRUE, footer = NULL )) })
       
       
       
       
-      # default restoration site location: presidio
+      # default planting site location: presidio
       s <- data.frame(species=NA, lat=37.801064, lon=-122.478557)
       coordinates(s) <- c("lon", "lat")
       crs(s) <- ll
       site <- reactiveValues(point = s)
       
-      
-      
-      # update location when map is clicked
+      # update planting site when map is clicked
       observeEvent(input$map_click, {
             s <- data.frame(species=NA, lat=input$map_click$lat, lon=input$map_click$lng)
             coordinates(s) <- c("lon", "lat")
@@ -175,32 +216,61 @@ server <- function(input, output, session) {
       # climate and soil differences between source populations and future planting site 
       sigmas <- reactive({
             
-            # for every cell in species range, stdevs between historic clim and planting site future
-            # (convert to probability and then sigma, correcting for dimensionality using chi sq distribution)
-            sed <- function(x, ...){
-                  if(is.na(x[1])) return(NA)
-                  sum((x - site_future()$clim_mean)^2 / site_future()$clim_sd^2)# SED ^ 2
+            ## climate ##
+            if(input$climstat=="GCM ensemble"){
+                  site_mean <- site_future()$clim_mean
+                  site_sd <- site_future()$clim_sd
+                  ndim <- site_future()$clim_ndim
+                  
+                  sigma <- function(x, ...){
+                        if(is.na(x[1])) return(NA)
+                        sum((x - site_mean)^2 / site_sd^2) %>% 
+                              pchisq(ndim) %>% 
+                              qchisq(1) %>% 
+                              sqrt()
+                  }
+                  clim_prob <- calc(smoothed_envt()$clim, sigma) %>%
+                        reclassify(c(10, Inf, 10))
             }
-            sigma <- function(x, ...){
-                  if(is.na(x[1])) return(NA)
-                  pchisq(x, site_future()$clim_ndim) %>% qchisq(1) %>% sqrt()
+            if(input$climstat=="species niche"){
+                  clim <- smoothed_envt()$clim
+                  range_mean <- cellStats(clim, "mean")
+                  range_sd <- cellStats(clim, "sd", asSample=F)
+                  clim <- (clim - range_mean) / range_sd
+                  
+                  site_mean <- (site_future()$clim_mean - range_mean) / range_sd
+                  ndim <- site_future()$clim_ndim
+                  
+                  sigma <- function(x, ...){
+                        if(is.na(x[1])) return(NA)
+                        sum((x - site_mean)^2) %>% 
+                              pchisq(ndim) %>% 
+                              qchisq(1) %>% 
+                              sqrt()
+                  }
+                  clim_prob <- calc(clim, sigma) %>%
+                        reclassify(c(10, Inf, 10))
             }
-            clim_prob <- calc(smoothed_envt()$clim, sed) %>% mask(smoothed_envt()$clim[[1]])
-            clim_prob <- calc(clim_prob, sigma)
-            clim_prob <- reclassify(clim_prob, c(10, Inf, 10))
             
-            # for every cell in range, difference in soil, corrected for dimensionality
-            sed <- function(x, ...){
-                  if(is.na(x[1])) return(NA)
-                  sum((x - site_future()$soil_mean)^2)# SED ^ 2
-            }
+            
+            ## soil ##
+            soil <- smoothed_envt()$soil
+            range_mean <- cellStats(soil, "mean")
+            range_sd <- cellStats(soil, "sd", asSample=F)
+            soil <- (soil - range_mean) / range_sd
+            
+            site_mean <- (site_future()$soil_mean - range_mean) / range_sd
+            ndim <- site_future()$soil_ndim
+            
             sigma <- function(x, ...){
                   if(is.na(x[1])) return(NA)
-                  pchisq(x, site_future()$soil_ndim) %>% qchisq(1) %>% sqrt()
+                  sum((x - site_mean)^2) %>%
+                        pchisq(ndim) %>% 
+                        qchisq(1) %>% 
+                        sqrt()
             }
-            soil_prob <- calc(smoothed_envt()$soil, sed) %>% mask(smoothed_envt()$soil[[1]])
-            soil_prob <- calc(soil_prob, sigma)
-            soil_prob <- reclassify(soil_prob, c(10, Inf, 10))
+            soil_prob <- calc(soil, sigma) %>%
+                  reclassify(c(10, Inf, 10))
             
             
             list(soil = soil_prob,
@@ -226,7 +296,8 @@ server <- function(input, output, session) {
       
       
       
-      colors <- c("red", "yellow", "seagreen1", "blue", "darkblue", "black")
+      colors <- c("red", "yellow", "green", "blue", "darkblue", "black")
+      colors <- c("red", "#FDE725FF", "#5DC863FF", "#21908CFF", "#3B528BFF", "#440154FF", "black")
       
       icon <- makeAwesomeIcon("leaf", markerColor="red")
       
