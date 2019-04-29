@@ -71,7 +71,7 @@ ui <- fluidPage(
                             spps, selected="Quercus agrifolia"),
              
              shinyWidgets::sliderTextInput("radius", span("Neighborhood radius (km) ", actionLink("i_radius", "[?]")),
-                                           choices=sort(unique(smoothed$radius)), selected=1,
+                                           choices=sort(unique(smoothed$radius)), selected=10,
                                            grid = T),
              
              selectInput("time", span("Target era", actionLink("i_time", "[?]")), 
@@ -100,11 +100,10 @@ server <- function(input, output, session) {
       
       showModal(modalDialog(
             title="Seeds of Change",
-            "Welcome. This tool is a prototype and still under development.",
-            "It's aimed at helping to identify populations that may be suitable as seed sources for ecological restoration projects,",
+            HTML("Welcome. This tool is aimed at helping to identify populations that may be suitable as seed sources for ecological restoration projects,",
             "incorporating data on species ranges, soil variation, and future climate change.",
-            "\nClick outside this window to get started. Click the map to select a planting site.",
-            easyClose = TRUE, footer = NULL
+            "<br><br>This version is an early prototype and still under development. Please contact mattkling@berkeley.edu with questions or bug reports."),
+            easyClose = TRUE, footer = modalButton("Dismiss")
       ))
       
       observeEvent(input$i_species, 
@@ -113,7 +112,7 @@ server <- function(input, output, session) {
                          "The tool comes pre-loaded with geographic range maps for key species of California native plants.",
                          "Select a species to load its estimated California geographic range, which is modeled based on climate, distance to known observations, and landscape intactness.",
                          "We'll use the map to estimate the species' environmental tolerance, model gene flow among nearby populations, and hypothesize which populations will have suitable genetics for the planting site.",
-                         easyClose = TRUE, footer = NULL )) })
+                         easyClose = TRUE, footer = modalButton("Dismiss") )) })
       observeEvent(input$i_radius, 
                    {showModal(modalDialog(
                          title="Incorporating gene flow",
@@ -122,13 +121,13 @@ server <- function(input, output, session) {
                          "This parameter lets you set the size of the local neighborhood around each source population within which gene flow is expected to homogenize local adaptation.",
                          "Choose a small smoothing radius to model highly localized adaptation, or a large radius to model strong effects of widespread gene flow relative to local selection.",
                          "(Note that large values take a lot more computation time, so maybe walk down and grab a sandwich or something while you wait.)",
-                         easyClose = TRUE, footer = NULL )) })
+                         easyClose = TRUE, footer = modalButton("Dismiss") )) })
       observeEvent(input$i_time, 
                    {showModal(modalDialog(
                          title="Climate change is a moving target",
                          "This tool estimates how well the historic adaptive environment at each provenance site matches the projected future environment at the planting site.",
                          "For which future planting site time period would you like to estimate historic climatic similarity?",
-                         easyClose = TRUE, footer = NULL )) })
+                         easyClose = TRUE, footer = modalButton("Dismiss") )) })
       observeEvent(input$i_basis, 
                    {showModal(modalDialog(
                          title="Climate distance metric",
@@ -136,14 +135,14 @@ server <- function(input, output, session) {
                          "You can select whether this is based on variation among climate models, in which case sigma reflects the likelihood of a future climate match,",
                          "or on variation across the species California range, in which case sigma reflects difference in terms of realized niche breadth.",
                          "(Note that soil similarity is always calculated using the range method.)",
-                         easyClose = TRUE, footer = NULL )) })
+                         easyClose = TRUE, footer = modalButton("Dismiss") )) })
       observeEvent(input$i_weight, 
                    {showModal(modalDialog(
                          title="Climate versus soil",
                          "By default soil and climate are given equal weight when calculating similarity to the planting site environment.", 
                          "Adjust this slder to incorporate species-specific knowledge about their relative importance in shaping local adaptation,",
                          "or to explore how the results change based on assumptions about their importance.",
-                         easyClose = TRUE, footer = NULL )) })
+                         easyClose = TRUE, footer = modalButton("Dismiss") )) })
       
       
       
@@ -257,7 +256,6 @@ server <- function(input, output, session) {
       
       # overall dissimilarity combining soil and climate
       final <- reactive({
-            #browser()
             prob <- (clim_sigmas() * input$pclim) + (soil_sigmas() * (1-input$pclim))
             
             d <- stack(smoothed_envt()$clim, smoothed_envt()$soil, 
@@ -287,7 +285,7 @@ server <- function(input, output, session) {
                                r <- final()$rasters[[input$color]]
                                
                                incProgress(1, detail = "Generating plots.")
-                               
+                               #browser()
                                pal <- colorNumeric(colors,
                                                    c(0, values(r)),
                                                    na.color = "transparent")
