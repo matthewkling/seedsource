@@ -65,8 +65,6 @@ ui <- fluidPage(
              br(),
              br(),
              br(),
-             #actionButton("run", "Run"),
-             #br(),
              br(),
              
              selectizeInput("sp", span("Focal species ", actionLink("i_species", "[?]")), 
@@ -259,7 +257,7 @@ server <- function(input, output, session) {
       
       # overall dissimilarity combining soil and climate
       final <- reactive({
-            
+            #browser()
             prob <- (clim_sigmas() * input$pclim) + (soil_sigmas() * (1-input$pclim))
             
             d <- stack(smoothed_envt()$clim, smoothed_envt()$soil, 

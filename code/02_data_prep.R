@@ -168,11 +168,11 @@ smoothed_envt <- function(e, radius){
       
       if(radius>0){
             for(i in 1:nlayers(clim)){
-                  clim[[i]] <- focal(clim[[i]], w=w, fun=m) %>%
+                  clim[[i]] <- focal(clim[[i]], w=w, fun=m, pad=T) %>%
                         mask(clim[[1]])
             }
             for(i in 1:nlayers(soil)){
-                  soil[[i]] <- focal(soil[[i]], w=w, fun=m) %>%
+                  soil[[i]] <- focal(soil[[i]], w=w, fun=m, pad=T) %>%
                         mask(soil[[1]])
             }
       }
@@ -190,7 +190,7 @@ for(x in spp){
       message(x)
       e <- species_envt(x)
       
-      for(r in c(0, 1, 2, 5, 10, 20, 50, 100)){
+      for(r in rev(c(0, 1, 2, 5, 10, 20, 50, 100))){
             message(paste("       r =", r))
             out <- paste0("assets/seedsource_data/smooth/", x, " ", r, ".rds")
             if(file.exists(out)) next()
