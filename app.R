@@ -220,8 +220,8 @@ server <- function(input, output, session) {
                               qchisq(1) %>% 
                               sqrt()
                   }
-                  clim_prob <- calc(smoothed_envt()$clim, sigma) %>%
-                        reclassify(c(10, Inf, 10))
+                  clim_prob <- calc(smoothed_envt()$clim, sigma)
+                  clim_prob <- reclassify(clim_prob, c(10, Inf, 10))
             }
             if(input$climstat=="species niche"){
                   clim <- smoothed_envt()$clim
