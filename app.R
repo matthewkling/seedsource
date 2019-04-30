@@ -326,12 +326,13 @@ server <- function(input, output, session) {
             
             vx <- input$xvar
             vy <- input$yvar
-            
-            d <- final()$rasters[[c(vx, vy, "prob")]] %>%
+            vc <- input$color
+            #browser()
+            d <- final()$rasters[[c(vx, vy, vc)]] %>%
                   rasterToPoints() %>% as.data.frame() %>%
-                  #arrange(desc(prob)) %>%
-                  na.omit()
-            names(d)[3:4] <- c("xvar", "yvar")
+                  na.omit() %>%
+                  sample_n(nrow(.))
+            names(d)[3:5] <- c("xvar", "yvar", "cvar")
             
             # future climate mean, and sd of either ensemble or niche 
             avg <- c(site_future()$clim_mean, site_future()$soil_mean)
@@ -345,20 +346,31 @@ server <- function(input, output, session) {
             fill_col <- NA
             
             ggplot() +
-                  geom_point(data=d, aes(xvar, yvar, color=prob), size=.5) +
+                  geom_point(data=d, aes(xvar, yvar, color=cvar), size=.5) +
                   scale_color_gradientn(colours=colors, limits=c(0, NA)) +
-                  annotate("polygon", color="red", fill=fill_col, alpha=.1,
+                  #annotate("point", color="red", shape=3, size=8,
+                  #         x=avg[vx], y=avg[vy]) +
+                  annotate("linerange", color="red", size=.5,
+                           x=avg[vx], 
+                           ymin=avg[vy] + std[vy]*c(-.5, .5), 
+                           ymax=avg[vy] + std[vy]*c(-2.5, 2.5)) +
+                  annotate("segment", color="red", size=.5,
+                           y=avg[vy], yend=avg[vy], 
+                           x=avg[vx] + std[vx]*c(-.5, .5), 
+                           xend=avg[vx] + std[vx]*c(-2.5, 2.5)) +
+                  annotate("polygon", color="red", fill=fill_col, size=.5,
                            x=avg[vx] + std[vx] * cos(seq(0,2*pi,length.out=100)),
                            y=avg[vy] + std[vy] * sin(seq(0,2*pi,length.out=100))) +
-                  annotate("polygon", color="red", fill=fill_col, alpha=.1,
+                  annotate("polygon", color="red", fill=fill_col, size=.5, 
                            x=avg[vx] + std[vx]*2 * cos(seq(0,2*pi,length.out=100)),
                            y=avg[vy] + std[vy]*2 * sin(seq(0,2*pi,length.out=100))) +
                   #annotate("segment", color="red",
                   #         x=hst[vx], y=hst[vy], xend=fut[vx], yend=fut[vy],
                   #         arrow=grid::arrow(type="closed", angle=15, length=unit(.15, "in"))) +
+                  coord_fixed(ratio = std[vx]/std[vy]) +
                   theme_minimal() +
                   theme(legend.position="none") +
-                  labs(x=vx, y=vy)
+                  labs(x=vx, y=vy, color=vc)
       })
       
 }
