@@ -86,10 +86,10 @@ ui <- fluidPage(
              hr(),
              fluidRow(
                    column(4,
-                          selectizeInput("xvar", "X variable", vars, "PPT")
+                          selectizeInput("xvar", "X variable", all_vars, "PPT")
                    ),
                    column(4,
-                          selectizeInput("yvar", "Y variable", vars, "JJA")
+                          selectizeInput("yvar", "Y variable", all_vars, "JJA")
                    ),
                    column(4,
                           selectizeInput("color", "Color variable", all_vars, "prob")
@@ -340,6 +340,7 @@ server <- function(input, output, session) {
             }else{
                   std <- c(range_stats()$clim_sd, range_stats()$soil_sd)
             }
+            names(avg) <- names(std) <- all_vars[1:length(avg)]
             
             fill_col <- NA
             
@@ -352,9 +353,6 @@ server <- function(input, output, session) {
                   annotate("polygon", color="red", fill=fill_col, alpha=.1,
                            x=avg[vx] + std[vx]*2 * cos(seq(0,2*pi,length.out=100)),
                            y=avg[vy] + std[vy]*2 * sin(seq(0,2*pi,length.out=100))) +
-                  annotate("polygon", color="red", fill=fill_col, alpha=.1,
-                           x=avg[vx] + std[vx]*3 * cos(seq(0,2*pi,length.out=100)),
-                           y=avg[vy] + std[vy]*3 * sin(seq(0,2*pi,length.out=100))) +
                   #annotate("segment", color="red",
                   #         x=hst[vx], y=hst[vy], xend=fut[vx], yend=fut[vy],
                   #         arrow=grid::arrow(type="closed", angle=15, length=unit(.15, "in"))) +
