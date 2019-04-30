@@ -1,10 +1,9 @@
 
 
 # to do:
-# preprocess raster stacks to avoid having to use stackBands
 # pre-load an initial set of results
-# bug: smoothing filter creating odd straight edge artifacts
 # make smoothing window circular
+# fix climate holes problem
 
 
 
@@ -58,39 +57,49 @@ ui <- fluidPage(
       
       useShinyalert(),
       
-      column(3,
-             br(),
-             tags$img(src="logo2.png", width="50%", align="left"),
-             br(),
-             br(),
-             br(),
-             br(),
-             br(),
-             
-             selectizeInput("sp", span("Focal species ", actionLink("i_species", "[?]")), 
-                            spps, selected="Quercus agrifolia"),
-             
-             shinyWidgets::sliderTextInput("radius", span("Neighborhood radius (km) ", actionLink("i_radius", "[?]")),
-                                           choices=sort(unique(smoothed$radius)), selected=10,
-                                           grid = T),
-             
-             selectInput("time", span("Target era", actionLink("i_time", "[?]")), 
-                         c("2041-2060", "2061-2080"), "2061-2080"),
-             
-             selectInput("climstat", span("Climatic similarity basis", actionLink("i_basis", "[?]")), 
-                         c("GCM ensemble", "species niche"), "GCM ensemble"),
-             
-             sliderInput("pclim", span("Climate importance (vs. soil)", actionLink("i_weight", "[?]")),
-                         min=0, max=1, value=.5, width="100%"),
+      column(4,
+             fluidRow(
+                   br(),
+                   tags$img(src="logo2.png", width="50%", align="left"),
+                   br()
+             ),
+             fluidRow(
+                   column(6,
+                          selectizeInput("sp", span("Focal species ", actionLink("i_species", "[?]")), 
+                                         spps, selected="Quercus agrifolia"),
+                          
+                          shinyWidgets::sliderTextInput("radius", span("Neighborhood radius (km) ", actionLink("i_radius", "[?]")),
+                                                        choices=sort(unique(smoothed$radius)), selected=10,
+                                                        grid = T),
+                          
+                          selectInput("time", span("Target era", actionLink("i_time", "[?]")), 
+                                      c("2041-2060", "2061-2080"), "2061-2080")
+                   ),
+                   column(6,
+                          selectInput("climstat", span("Climatic similarity basis", actionLink("i_basis", "[?]")), 
+                                      c("GCM ensemble", "species niche"), "species niche"),
+                          
+                          sliderInput("pclim", span("Climate importance (vs. soil)", actionLink("i_weight", "[?]")),
+                                      min=0, max=1, value=.5, width="100%")
+                   )
+             ),
              hr(),
-             
-             selectizeInput("color", "Color variable", all_vars, "prob"),
-             br(),
-             plotOutput("scatter", height=300),
-             selectizeInput("xvar", "x variable", vars, "PPT"),
-             selectizeInput("yvar", "y variable", vars, "JJA")
+             fluidRow(
+                   column(4,
+                          selectizeInput("xvar", "X variable", vars, "PPT")
+                   ),
+                   column(4,
+                          selectizeInput("yvar", "Y variable", vars, "JJA")
+                   ),
+                   column(4,
+                          selectizeInput("color", "Color variable", all_vars, "prob")
+                   )
+             ),
+             fluidRow(
+                   plotOutput("scatter")
+             )
       ),
-      column(9,
+      column(8,
              leafletOutput("map", height=1000)
       )
 )
@@ -101,8 +110,8 @@ server <- function(input, output, session) {
       showModal(modalDialog(
             title="Seeds of Change",
             HTML("Welcome. This tool is aimed at helping to identify populations that may be suitable as seed sources for ecological restoration projects,",
-            "incorporating data on species ranges, soil variation, and future climate change.",
-            "<br><br>This version is an early prototype and still under development. Please contact mattkling@berkeley.edu with questions or bug reports."),
+                 "incorporating data on species ranges, soil variation, and future climate change.",
+                 "<br><br>This version is an early prototype and still under development. Please contact mattkling@berkeley.edu with questions or bug reports."),
             easyClose = TRUE, footer = modalButton("Dismiss")
       ))
       
@@ -191,6 +200,13 @@ server <- function(input, output, session) {
                   readRDS()
       })
       
+      range_stats <- reactive({
+            list(clim_mean = cellStats(smoothed_envt()$clim, "mean"),
+                 clim_sd = cellStats(smoothed_envt()$clim, "sd", asSample=F),
+                 soil_mean = cellStats(smoothed_envt()$soil, "mean"),
+                 soil_sd = cellStats(smoothed_envt()$soil, "sd", asSample=F))
+      })
+      
       # climate differences between source populations and future planting site 
       clim_sigmas <- reactive({
             if(input$climstat=="GCM ensemble"){
@@ -210,8 +226,8 @@ server <- function(input, output, session) {
             }
             if(input$climstat=="species niche"){
                   clim <- smoothed_envt()$clim
-                  range_mean <- cellStats(clim, "mean")
-                  range_sd <- cellStats(clim, "sd", asSample=F)
+                  range_mean <- range_stats()$clim_mean
+                  range_sd <- range_stats()$clim_sd
                   clim <- (clim - range_mean) / range_sd
                   
                   site_mean <- (site_future()$clim_mean - range_mean) / range_sd
@@ -234,8 +250,8 @@ server <- function(input, output, session) {
       soil_sigmas <- reactive({
             
             soil <- smoothed_envt()$soil
-            range_mean <- cellStats(soil, "mean")
-            range_sd <- cellStats(soil, "sd", asSample=F)
+            range_mean <- range_stats()$soil_mean
+            range_sd <- range_stats()$soil_sd
             soil <- (soil - range_mean) / range_sd
             
             site_mean <- (site_future()$soil_mean - range_mean) / range_sd
@@ -317,29 +333,32 @@ server <- function(input, output, session) {
                   na.omit()
             names(d)[3:4] <- c("xvar", "yvar")
             
-            #clim_sd <- final()$site_clim["clim_sd",]
-            #clim_mean <- final()$site_clim["clim_mean",]
-            #clim_h <- final()$site_clim["clim_hist",]
-            #soil_mean <- final()$site_soil
+            # future climate mean, and sd of either ensemble or niche 
+            avg <- c(site_future()$clim_mean, site_future()$soil_mean)
+            if(input$climstat == "GCM ensemble"){
+                  std <- c(site_future()$clim_sd, range_stats()$soil_sd)
+            }else{
+                  std <- c(range_stats()$clim_sd, range_stats()$soil_sd)
+            }
             
             fill_col <- NA
             
             ggplot() +
                   geom_point(data=d, aes(xvar, yvar, color=prob), size=.5) +
                   scale_color_gradientn(colours=colors, limits=c(0, NA)) +
-                  #annotate("polygon", color="red", fill=fill_col, alpha=.1,
-                  #         x=clim_mean[vx] + clim_sd[vx] * cos(seq(0,2*pi,length.out=100)),
-                  #         y=clim_mean[vy] + clim_sd[vy] * sin(seq(0,2*pi,length.out=100))) +
-                  #annotate("polygon", color="red", fill=fill_col, alpha=.1,
-                  #         x=clim_mean[vx] + clim_sd[vx]*2 * cos(seq(0,2*pi,length.out=100)),
-                  #         y=clim_mean[vy] + clim_sd[vy]*2 * sin(seq(0,2*pi,length.out=100))) +
-                  #annotate("polygon", color="red", fill=fill_col, alpha=.1,
-                  #         x=clim_mean[vx] + clim_sd[vx]*3 * cos(seq(0,2*pi,length.out=100)),
-                  #         y=clim_mean[vy] + clim_sd[vy]*3 * sin(seq(0,2*pi,length.out=100))) +
+                  annotate("polygon", color="red", fill=fill_col, alpha=.1,
+                           x=avg[vx] + std[vx] * cos(seq(0,2*pi,length.out=100)),
+                           y=avg[vy] + std[vy] * sin(seq(0,2*pi,length.out=100))) +
+                  annotate("polygon", color="red", fill=fill_col, alpha=.1,
+                           x=avg[vx] + std[vx]*2 * cos(seq(0,2*pi,length.out=100)),
+                           y=avg[vy] + std[vy]*2 * sin(seq(0,2*pi,length.out=100))) +
+                  annotate("polygon", color="red", fill=fill_col, alpha=.1,
+                           x=avg[vx] + std[vx]*3 * cos(seq(0,2*pi,length.out=100)),
+                           y=avg[vy] + std[vy]*3 * sin(seq(0,2*pi,length.out=100))) +
                   #annotate("segment", color="red",
-                  #         x=clim_h[vx], y=clim_h[vy], xend=clim_mean[vx], yend=clim_mean[vy],
-            #         arrow=grid::arrow(type="closed", angle=15, length=unit(.15, "in"))) +
-            theme_minimal() +
+                  #         x=hst[vx], y=hst[vy], xend=fut[vx], yend=fut[vy],
+                  #         arrow=grid::arrow(type="closed", angle=15, length=unit(.15, "in"))) +
+                  theme_minimal() +
                   theme(legend.position="none") +
                   labs(x=vx, y=vy)
       })
