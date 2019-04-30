@@ -60,8 +60,7 @@ ui <- fluidPage(
       column(4,
              fluidRow(
                    br(),
-                   tags$img(src="logo2.png", width="50%", align="left"),
-                   br()
+                   tags$img(src="logo5.png", width="100%", align="left")
              ),
              fluidRow(
                    column(6,
