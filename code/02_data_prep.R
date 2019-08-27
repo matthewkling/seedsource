@@ -15,7 +15,7 @@ select <- dplyr::select
 
 # list of focal species
 spp <- read.csv("focal_species.csv", stringsAsFactors = F)
-spp <- spp$Species
+spp <- unique(spp$Species)
 
 
 

@@ -108,9 +108,10 @@ server <- function(input, output, session) {
       
       showModal(modalDialog(
             title="Seeds of Change",
-            HTML("Welcome. This tool is aimed at helping to identify populations that may be suitable as seed sources for ecological restoration projects,",
+            HTML("Welcome. This tool is aimed at helping restoration managers to identify suitable seed sources and planting sites for ecological restoration projects,",
                  "incorporating data on species ranges, soil variation, and future climate change.",
-                 "<br><br>This version is an early prototype and still under development. Please contact mattkling@berkeley.edu with questions or bug reports."),
+                 "<br><br>All results are modeled predictions and should be treated as hypotheses and exploratory visualizations -- they may or may not accurately predict fitness on the ground.",
+                 "This app is an early prototype and still under development. Please contact mattkling@berkeley.edu with questions or bug reports."),
             easyClose = TRUE, footer = modalButton("Dismiss")
       ))
       
@@ -128,13 +129,13 @@ server <- function(input, output, session) {
                          "The relative importance of gene swamping versus local adaptation is known to vary among species.",
                          "This parameter lets you set the size of the local neighborhood around each source population within which gene flow is expected to homogenize local adaptation.",
                          "Choose a small smoothing radius to model highly localized adaptation, or a large radius to model strong effects of widespread gene flow relative to local selection.",
-                         "(Note that large values take a lot more computation time, so maybe walk down and grab a sandwich or something while you wait.)",
                          easyClose = TRUE, footer = modalButton("Dismiss") )) })
       observeEvent(input$i_time, 
                    {showModal(modalDialog(
                          title="Climate change is a moving target",
                          "This tool estimates how well the historic adaptive environment at each provenance site matches the projected future environment at the planting site.",
-                         "For which future planting site time period would you like to estimate historic climatic similarity?",
+                         "For which future time period would you like to estimate historic climatic similarity?",
+                         "Estimates are based on an average of future climate models and emissions scenarios.",
                          easyClose = TRUE, footer = modalButton("Dismiss") )) })
       observeEvent(input$i_basis, 
                    {showModal(modalDialog(
@@ -168,7 +169,6 @@ server <- function(input, output, session) {
             crs(s) <- ll
             site$point <- s
       })
-      
       
       # future environment at planting site
       site_future <- reactive({
@@ -213,15 +213,19 @@ server <- function(input, output, session) {
                   site_sd <- site_future()$clim_sd
                   ndim <- site_future()$clim_ndim
                   
-                  sigma <- function(x, ...){
+                  
+                  sigma <- function(x, site_mean, ndim, site_sd){
                         if(is.na(x[1])) return(NA)
-                        sum((x - site_mean)^2 / site_sd^2) %>% 
-                              pchisq(ndim) %>% 
-                              qchisq(1) %>% 
-                              sqrt()
+                        x <- sum((x - site_mean)^2 / site_sd^2)
+                        x <- pchisq(x, ndim)
+                        x <- qchisq(x, 1)
+                        sqrt(x)
                   }
-                  clim_prob <- calc(smoothed_envt()$clim, sigma)
+                  clim_prob <- calc(smoothed_envt()$clim, 
+                                    function(x) sigma(x, site_mean, ndim, site_sd))
+                  message(length(na.omit(values(clim_prob))))
                   clim_prob <- reclassify(clim_prob, c(10, Inf, 10))
+                  message(length(na.omit(values(clim_prob))))
             }
             if(input$climstat=="species niche"){
                   clim <- smoothed_envt()$clim
@@ -232,14 +236,14 @@ server <- function(input, output, session) {
                   site_mean <- (site_future()$clim_mean - range_mean) / range_sd
                   ndim <- site_future()$clim_ndim
                   
-                  sigma <- function(x, ...){
+                  sigma <- function(x, site_mean, ndim){
                         if(is.na(x[1])) return(NA)
-                        sum((x - site_mean)^2) %>% 
-                              pchisq(ndim) %>% 
-                              qchisq(1) %>% 
-                              sqrt()
+                        x <- sum((x - site_mean)^2)
+                        x <- pchisq(x, ndim)
+                        x <- qchisq(x, 1)
+                        sqrt(x)
                   }
-                  clim_prob <- calc(clim, sigma) %>%
+                  clim_prob <- calc(clim, function(x) sigma(x, site_mean, ndim)) %>%
                         reclassify(c(10, Inf, 10))
             }
             clim_prob
@@ -256,14 +260,14 @@ server <- function(input, output, session) {
             site_mean <- (site_future()$soil_mean - range_mean) / range_sd
             ndim <- site_future()$soil_ndim
             
-            sigma <- function(x, ...){
+            sigma <- function(x, site_mean, ndim){
                   if(is.na(x[1])) return(NA)
-                  sum((x - site_mean)^2) %>%
-                        pchisq(ndim) %>% 
-                        qchisq(1) %>% 
-                        sqrt()
+                  x <- sum((x - site_mean)^2)
+                  x <- pchisq(x, ndim)
+                  x <- qchisq(x, 1)
+                  sqrt(x)
             }
-            soil_prob <- calc(soil, sigma) %>%
+            soil_prob <- calc(soil, function(x) sigma(x, site_mean, ndim)) %>%
                   reclassify(c(10, Inf, 10))
             
             soil_prob
@@ -280,9 +284,6 @@ server <- function(input, output, session) {
       })
       
       
-      
-      
-      colors <- c("red", "yellow", "green", "blue", "darkblue", "black")
       colors <- c("red", "#FDE725FF", "#5DC863FF", "#21908CFF", "#3B528BFF", "#440154FF", "black")
       
       icon <- makeAwesomeIcon("leaf", markerColor="red")
@@ -291,21 +292,26 @@ server <- function(input, output, session) {
             
             withProgress(message = "Stand by.", 
                          value = 0, {
-                               incProgress(.25, detail = "Computing climate similarities.")
+                               incProgress(.2, detail = "Computing climate similarities.")
                                x <- clim_sigmas()
-                               incProgress(.5, detail = "Computing soil similarities.")
+                               incProgress(.4, detail = "Computing soil similarities.")
                                x <- soil_sigmas()
                                
-                               incProgress(.75, detail = "Merging dimensions.")
+                               incProgress(.6, detail = "Merging dimensions.")
                                r <- final()$rasters[[input$color]]
                                
-                               incProgress(1, detail = "Generating plots.")
-                               #browser()
+                               incProgress(.8, detail = "Generating plots.")
+                               #if(input$color=="clim_prob") browser()
+                               
+                               min_value <- ifelse(grepl("prob", input$color), 0, min(values(r), na.rm=T))
+                               
                                pal <- colorNumeric(colors,
-                                                   c(0, values(r)),
+                                                   domain = c(min_value, max(values(r), na.rm=T)),
                                                    na.color = "transparent")
                                
                                latlon <- coordinates(site$point)
+                               
+                               #color_label <- 
                                
                                #Stamen.TonerBackground
                                #Esri.WorldTerrain
@@ -316,7 +322,7 @@ server <- function(input, output, session) {
                                      addRasterImage(r, colors=pal, opacity=0.8) %>%
                                      addAwesomeMarkers(lng=latlon[1], lat=latlon[2], icon=icon) %>%
                                      addLegend(pal=pal, values=c(0, values(r)),
-                                               opacity=0.8, title="Sigma")
+                                               opacity=0.8, title=input$color)
                                
                          })
       })
@@ -342,11 +348,14 @@ server <- function(input, output, session) {
             }
             names(avg) <- names(std) <- all_vars[1:length(avg)]
             
+            min_value <- ifelse(grepl("prob", input$color), 0, 
+                                min(d$cvar, na.rm=T))
+            
             fill_col <- NA
             
             ggplot() +
                   geom_point(data=d, aes(xvar, yvar, color=cvar), size=.5) +
-                  scale_color_gradientn(colours=colors, limits=c(0, NA)) +
+                  scale_color_gradientn(colours=colors, limits=c(min_value, NA)) +
                   #annotate("point", color="red", shape=3, size=8,
                   #         x=avg[vx], y=avg[vy]) +
                   annotate("linerange", color="red", size=.5,
