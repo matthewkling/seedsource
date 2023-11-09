@@ -14,7 +14,7 @@ select <- dplyr::select
 ###### restoration parameters #####
 
 # list of focal species
-spp <- read.csv("focal_species.csv", stringsAsFactors = F)
+spp <- read.csv("assets/focal_species.csv", stringsAsFactors = F)
 key_spp <- spp$Species
 
 
