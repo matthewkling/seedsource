@@ -15,37 +15,42 @@ select <- dplyr::select
 
 # list of focal species
 spp <- read.csv("focal_species.csv", stringsAsFactors = F)
-spp <- spp$Species
+key_spp <- spp$Species
 
 
 
 
 ### climate ensemble summaries ####
 
-clim <- data.frame(path=list.files("F:/seeds/chelsa_derived", recursive=T, full.names=T),
+clim <- data.frame(path=list.files("~/data/seeds/chelsa_derived", recursive=T, full.names=T),
                    stringsAsFactors=F) %>%
       mutate(set=sub("\\.tif", "", basename(path))) %>%
       separate(set, c("year", "model", "scenario"), remove=F, sep=" ")
 
 ext <- extent(-125, -114, 32.5, 42)
 
-# for each variable-year, mean and sd of model ensemble (summarize over models and scenarios)
+# for each variable-year-scenario, mean and sd of model ensemble
 vars <- c("PPT", "PET", "AET", "CWD", "RAR", "DJF", "JJA")
 for(y in unique(clim$year)){
       for(v in 1:7){
-            s <- stackBands(clim$path[clim$year==y], v)
-            var <- vars[v]
-            if(var=="PPT") s <- log10(s)
-
-            avg <- mean(s)
-            stdev <- calc(s, sd)
-            s <- stack(avg, stdev)
-
-            s <- crop(s, ext)
-
-            writeRaster(s,
-                        paste0("assets/seedsource_data/climate/ensemble ", y, " ", var, ".tif"),
-                        overwrite=T)
+            for(p in unique(clim$scenario)){
+                  
+                  paths <- clim$path[clim$year == y & clim$scenario == p]
+                  if(length(paths) == 0) next()
+                  s <- stackBands(paths, v)
+                  var <- vars[v]
+                  if(var=="PPT") s <- log10(s)
+                  
+                  avg <- mean(s)
+                  stdev <- calc(s, sd)
+                  s <- stack(avg, stdev)
+                  
+                  s <- crop(s, ext)
+                  
+                  terra::writeRaster(terra::rast(s),
+                                     paste0("assets/climate/ensemble ", y, " ", p, " ", var, ".tif"),
+                                     overwrite=T)
+            }
       }
 }
 
@@ -54,41 +59,13 @@ for(y in unique(clim$year)){
 
 
 
-### species ranges #########
-
-f <- list.files("E:/phycon/001_distributions/pred_s25km", full.names=T)
-#f <- f[sub("\\.rds", "", basename(f)) %in% spp]
-
-## transfer sdm to climate grid ##
-template <- raster(clim$path[1])
-for(x in spp){
-      message(x)
-      r <- readRDS(f[grepl(x, f)])
-      m <- cellStats(r, max) * .2
-      r <- r %>%
-            reclassify(c(-1, m, NA,
-                         m, 1, 1))
-      d <- r %>%
-            rasterToPoints() %>%
-            as.data.frame()
-
-      coordinates(d) <- c("x", "y")
-      
-      crs(d) <- crs(r)
-      d <- spTransform(d, crs(template))
-
-      r <- rasterize(d, template, field="layer") %>%
-            crop(ext)
-      saveRDS(r, paste0("assets/seedsource_data/ranges/", x, ".rds"))
-}
-
 
 
 
 #### soils ####
 
 # soils data
-soil <- list.files("F:/SoilGrids", full.names=T, pattern=".tif") %>%
+soil <- list.files("F:/SoilGrids", full.names = T, pattern = ".tif") %>%
       stack() %>%
       crop(ext)
 
@@ -118,8 +95,36 @@ soil <- stack(template, template, template,
               template, template)
 for(i in 1:nlayers(soil)) soil[[i]][] <- agg[,i]
 
-writeRaster(soil, "assets/seedsource_data/climate/soil_800m.tif",
+writeRaster(soil, "assets/climate/soil_800m.tif",
             overwrite=T)
+
+
+
+
+### species ranges #########
+
+#f <- f[sub("\\.rds", "", basename(f)) %in% spp]
+
+## transfer sdm to climate grid ##
+f <- list.files("~/data/ca_plant_ranges_philtransb/", full.names=T)
+template <- raster(clim$path[1])
+project_range <- function(x = "NONE", p = .1, outdir = "assets/all_species/ranges/"){
+      outfile <- paste0(outdir, x, ".tif")
+      if(file.exists(outfile)) return("skipped")
+      message(x)
+      fx <- f[grepl(x, f)]
+      if(x == "NONE") fx <- f[[1]]
+      r <- raster(fx)
+      r <- projectRaster(r, template)
+      m <- cellStats(r, max) * p
+      if(x == "NONE") m <- -1
+      r <- r %>%
+            reclassify(c(-1, m, NA,
+                         m, 1, 1)) %>%
+            trim()
+      writeRaster(r, outfile, overwrite = T)
+      return("projected")
+}
 
 
 
@@ -127,27 +132,27 @@ writeRaster(soil, "assets/seedsource_data/climate/soil_800m.tif",
 ##### smoothed environmental rasters per species #####
 
 vars <- sort(c("PPT", "AET", "CWD", "DJF", "JJA"))
-clim_files <- data.frame(path=list.files("assets/seedsource_data/climate",
+clim_files <- data.frame(path=list.files("assets/climate",
                                          full.names=T, pattern="ensemble"),
                          stringsAsFactors=F) %>%
-      mutate(set=gsub("\\.tif", "", basename(path))) %>%
-      separate(set, c("junk", "year", "var"), remove=F, sep=" ") %>%
+      mutate(set = gsub("\\.tif", "", basename(path))) %>%
+      separate(set, c("junk", "year", "scenario", "var"), remove = F, sep = " ") %>%
       select(-junk) %>%
       filter(var %in% vars) %>% arrange(var)
 
-soil_all <- stack("assets/seedsource_data/climate/soil_800m.tif")
+soil_all <- stack("assets/climate/soil_800m.tif")
 
 
 # historic environments across species range
-species_envt <- function(x){
-      range <- readRDS(paste0("assets/seedsource_data/ranges/", x, ".rds"))
+species_envt <- function(x, dir = "assets/all_species/ranges/"){
+      range <- raster(paste0(dir, x, ".tif"))
       
-      clim <- stackBands(clim_files$path[clim_files$year=="1979-2013"], 1)
+      clim <- stackBands(clim_files$path[clim_files$year=="1981-2010"], 1)
       names(clim) <- vars
       
       range <- crop(range, clim)
       clim <- clim %>% crop(range) %>% mask(range) %>% trim()
-      soil <- soil_all %>% mask(range) %>% trim()
+      soil <- soil_all %>% crop(range) %>% mask(range) %>% trim()
       
       list(soil = crop(soil, clim),
            clim = crop(clim, soil))
@@ -155,46 +160,78 @@ species_envt <- function(x){
 
 # smoothed historic environment representing gene flow
 smoothed_envt <- function(e, radius){
-      w <- matrix(1, 1+radius*2, 1+radius*2)
-      center <- length(w) / 2 + .5
       
-      m <- function(x, ...){
-            if(is.na(x[center])) return(NA)
-            mean(na.omit(x))
+      require(terra)
+      e <- c(rast(e[[1]]), rast(e[[2]]))
+      dime <- dim(e)
+      
+      rz <- res(e[[1]])[1]
+      w <- focalWeight(e[[1]], rz/2 + rz*radius, "circle")
+      w[w>0] <- 1
+      
+      if(ncol(w) > 2 * ncol(e) |
+         nrow(w) > 2 * nrow(e)){
+            e <- extend(e, max(dim(w)))
       }
       
-      clim <- e$clim
-      soil <- e$soil
+      if(radius > 0) e <- terra::focal(e, w=w, fun=mean, na.rm=T, na.policy="omit")
       
-      if(radius>0){
-            for(i in 1:nlayers(clim)){
-                  clim[[i]] <- focal(clim[[i]], w=w, fun=m, pad=T) %>%
-                        mask(clim[[1]])
-            }
-            for(i in 1:nlayers(soil)){
-                  soil[[i]] <- focal(soil[[i]], w=w, fun=m, pad=T) %>%
-                        mask(soil[[1]])
-            }
-      }
-      
-      names(clim) <- vars
-      names(soil) <- paste0("soil", 1:nlayers(soil))
-      
-      list(soil = soil,
-           clim = clim)
+      # names(e)[6:10] <- paste0("soil", 1:5)
+      return(e)
 }
 
 
+all_spp <- list.files("~/data/ca_plant_ranges_philtransb/") %>%
+      str_remove("\\.tif") %>%
+      sample(length(.)) %>%
+      c("NONE")
 
-for(x in spp){
+sp_smooth <- function(x, indir = "assets/all_species/range/", outdir = "assets/all_species/smooth/"){
+      require(raster)
+      if(file.exists(paste0(dir, x, " ", 100, ".tif"))) return("skipped")
       message(x)
-      e <- species_envt(x)
-      
-      for(r in rev(c(0, 1, 2, 5, 10, 20, 50, 100))){
-            message(paste("       r =", r))
-            out <- paste0("assets/seedsource_data/smooth/", x, " ", r, ".rds")
+      z <- species_envt(x, dir = indir)
+      for(r in c(0, 1, 2, 5, 10, 20, 50, 100)){
+            message(r)
+            out <- paste0(outdir, x, " ", r, ".tif")
             if(file.exists(out)) next()
-            s <-  smoothed_envt(e, r)
-            saveRDS(s, out)
+            terra::writeRaster(smoothed_envt(z, r), out, overwrite = T)
       }
+      return("done")
 }
+
+
+# species niche breadths
+niche_breadth <- function(x, dir = "assets/seedsource_data/smooth/"){
+      require(terra)
+      r <- rast(paste0(dir, x, " ", 0, ".tif"))
+      m <- global(r, "mean", na.rm = T) %>% 
+            as.data.frame() %>%
+            rownames_to_column("var") %>%
+            mutate(var = str_replace(var, "800m_", "PC"))
+      s <- global(r, "sd", na.rm = T) %>% 
+            as.data.frame()
+      m$sd <- s$sd
+      m$species <- x
+      m
+}
+
+
+library(furrr)
+plan(multisession, workers = 6)
+
+future_map(all_spp, project_range)
+sm <- future_map(all_spp, sp_smooth)
+niches <- future_map_dfr(all_spp, niche_breadth)
+saveRDS(niches %>% as_tibble(), "assets/range_stats.rds")
+
+# would be better to just copy select species data to the appropriate folder instead of regenerating. but:
+future_map(key_spp, project_range, outdir = "assets/select_species/ranges/")
+sm <- future_map(key_spp, sp_smooth, indir = "assets/select_species/ranges/", outdir = "assets/select_species/smooth/")
+
+
+
+# mask nevada from all climate layers (for computational efficiency)
+f <- list.files("assets/climate/", full.names = T)
+msk <- rast("assets/all_species/smooth/NONE 0.tif")[[1]]
+map(f, function(x) x %>% rast() %>% crop(msk) %>% mask(msk) %>% writeRaster(x, overwrite = T) )
