@@ -1,12 +1,5 @@
 
 
-# to do:
-# pre-load an initial set of results
-# make smoothing window circular
-# fix climate holes problem
-
-
-
 
 library(shiny)
 library(rintrojs)
@@ -16,114 +9,205 @@ library(tidyr)
 library(ggplot2)
 library(leaflet)
 library(raster)
+library(terra)
 library(grid)
 library(ecoclim)
+library(purrr)
 select <- dplyr::select
-extract <- raster::extract
+extract <- terra::extract
 
+
+assets <- ifelse(dir.exists("assets/all_species"), "assets/all_species/", "assets/select_species/")
 
 # climate metadata
 vars <- sort(c("PPT", "AET", "CWD", "DJF", "JJA"))
-clim_files <- data.frame(path=list.files("assets/seedsource_data/climate",
+clim_files <- data.frame(path=list.files("assets/climate",
                                          full.names=T, pattern="ensemble"),
                          stringsAsFactors=F) %>%
       mutate(set=gsub("\\.tif", "", basename(path))) %>%
-      separate(set, c("junk", "year", "var"), remove=F, sep=" ") %>%
+      separate(set, c("junk", "year", "ssp", "var"), remove=F, sep=" ") %>%
       select(-junk) %>%
+      mutate(ssp = ifelse(ssp == "NA", "historic", toupper(ssp))) %>%
       filter(var %in% vars) %>% arrange(var)
 
-spps <- list.files("assets/seedsource_data/ranges") %>% sub("\\.rds", "", .)
+ssps <- unique(clim_files$ssp)
+times <- unique(clim_files$year)
 
-soil_all <- stack("assets/seedsource_data/climate/soil_800m.tif")
+spps <- list.files(paste0(assets, "ranges")) %>% sub("\\.tif", "", .)
 
-smoothed <- data.frame(path=list.files("assets/seedsource_data/smooth",
-                                       full.names=T),
+soil_all <- rast("assets/climate/soil_800m.tif")
+names(soil_all) <- paste0("soil_PC", 1:nlyr(soil_all))
+
+smoothed <- data.frame(path=list.files(paste0(assets, "smooth"), full.names=T),
                        stringsAsFactors=F) %>%
-      mutate(set=gsub("\\.rds", "", basename(path))) %>%
+      mutate(set = gsub("\\.tif", "", basename(path)),
+             set = str_replace(set, "NONE ", "NONE NONE ")) %>%
       separate(set, c("genus", "species", "radius"), remove=F, sep=" ") %>%
-      mutate(gs=paste(genus, species),
-             radius=as.integer(radius)) %>%
+      mutate(gs = paste(genus, species),
+             gs = str_replace(gs, "NONE NONE", "NONE"),
+             radius = as.integer(radius)) %>%
       select(path, gs, radius)
 
-
+range_summaries <- readRDS(paste0(assets, "range_stats.rds"))
 
 ll <- crs("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
 
-all_vars <- c(vars, paste0("soil_PC", 1:5), "clim_prob", "soil_prob", "prob")
+all_vars <- data.frame(abbv = c(vars, paste0("soil_PC", 1:5), "clim_prob", "soil_prob", "prob", "rgb"))
+all_vars$desc <- c("Actual evapotranspiration", "Climatic water deficit",
+                   "Winter minimum temperature", "Summer maximum temperature",
+                   "Annual precipitation",
+                   "Soil PC1", "Soil PC2", "Soil PC3", "Soil PC4", "Soil PC5",
+                   "Climate sigma", "Soil sigma", "Combined sigma",
+                   "Ordination")
+all_vars$units <- c("(mm)", "(mm)",
+                    "(deg. C)", "(deg. C)",
+                    "(log10 mm)",
+                    rep("(SD)", 5),
+                    rep("(similarity to target, SD)", 3),
+                    "(similar colors have\nsimilar enviroments)")
+all_vars$min <- c(rep(NA, 10), rep(0, 3), NA)
+all_vars$palette <- c(rep("viridis", 10), rep("sigma", 3), NA)
+
+sigma <- function(x, site_mean){
+      z <- sqrt(sum((x - site_mean)^2))
+      z[] <- sqrt(qchisq(pchisq(z[], length(site_mean)), 1))
+      classify(z, matrix(c(10, Inf, 10), nrow = 1))
+}
 
 
+# default focal site location: presidio
+lonlat <- "-122.48, 37.80"
+s <- data.frame(species=NA, lat=37.80, lon=-122.48)
+coordinates(s) <- c("lon", "lat")
+crs(s) <- ll
 
-ui <- fluidPage(
-      
-      useShinyalert(),
-      
-      column(4,
-             fluidRow(
-                   br(),
-                   tags$img(src="logo5.png", width="100%", align="left")
-             ),
-             fluidRow(
-                   column(6,
-                          selectizeInput("sp", span("Focal species ", actionLink("i_species", "[?]")), 
-                                         spps, selected="Quercus agrifolia"),
-                          
-                          shinyWidgets::sliderTextInput("radius", span("Neighborhood radius (km) ", actionLink("i_radius", "[?]")),
-                                                        choices=sort(unique(smoothed$radius)), selected=10,
-                                                        grid = T),
-                          
-                          selectInput("time", span("Target era", actionLink("i_time", "[?]")), 
-                                      c("2041-2060", "2061-2080"), "2061-2080")
-                   ),
-                   column(6,
-                          selectInput("climstat", span("Climatic similarity basis", actionLink("i_basis", "[?]")), 
-                                      c("GCM ensemble", "species niche"), "species niche"),
-                          
-                          sliderInput("pclim", span("Climate importance (vs. soil)", actionLink("i_weight", "[?]")),
-                                      min=0, max=1, value=.5, width="100%")
-                   )
-             ),
-             hr(),
-             fluidRow(
-                   column(4,
-                          selectizeInput("xvar", "X variable", all_vars, "PPT")
-                   ),
-                   column(4,
-                          selectizeInput("yvar", "Y variable", all_vars, "JJA")
-                   ),
-                   column(4,
-                          selectizeInput("color", "Color variable", all_vars, "prob")
-                   )
-             ),
-             fluidRow(
-                   plotOutput("scatter")
-             )
-      ),
-      column(8,
-             leafletOutput("map", height=1000)
-      )
+
+# define a keyPressed input that activates when RETURN is pressed
+js <- '
+$(document).on("keyup", function(e) {
+  if(e.keyCode == 13){
+    Shiny.onInputChange("keyPressed", Math.random());
+  }
+});
+'
+
+ui <- navbarPage("Seeds of Change",
+                 fluid = TRUE,
+                 selected = "Home",
+                 tags$script(js),
+                 
+                 tabPanel("Home",
+                          column(4,
+                                 fluidRow(
+                                       column(4,
+                                              selectizeInput("sp", 
+                                                             span("Focal species ", actionLink("i_species", "[?]")), 
+                                                             choices = spps, selected = "Quercus agrifolia"),
+                                              textInput("lonlat",
+                                                        span("Location ", actionLink("i_location", "[?]")), 
+                                                        paste(s$lon, s$lat, sep = ", ")
+                                              ),
+                                              selectInput("mode", 
+                                                          span("Target site activity ", actionLink("i_mode", "[?]")), 
+                                                          c("planting", "collection"), "planting")
+                                       ),
+                                       column(4,
+                                              selectInput("time", 
+                                                          span("Time period ", actionLink("i_time", "[?]")), 
+                                                          times, "2041-2070"),
+                                              selectInput("ssp", 
+                                                          span("Scenario ", actionLink("i_ssp", "[?]")), 
+                                                          ssps, "SSP585"),
+                                              uiOutput("constraintControls")
+                                       ),
+                                       column(4,
+                                              shinyWidgets::sliderTextInput("radius", 
+                                                                            span("Smoothing radius", actionLink("i_radius", "[?]")),
+                                                                            choices=sort(unique(smoothed$radius)), selected = 2,
+                                                                            post = " km", grid = T),
+                                              sliderInput("pclim", 
+                                                          span("Soil versus Climate", actionLink("i_weight", "[?]")),
+                                                          min=0, max=100, value=50, step=10, post = "% clim",
+                                                          width="100%")
+                                       )
+                                       
+                                 ),
+                                 hr(),
+                                 fluidRow(
+                                       column(4, span(textOutput("target_label"), style="color:red")),
+                                       column(4, textOutput("points_label")),
+                                       column(4, span(textOutput("color_label"), style="color:darkblue")),
+                                 ),
+                                 fluidRow(
+                                       plotOutput("scatter")
+                                 ),
+                                 fluidRow(
+                                       column(4,
+                                              selectizeInput("xvar", "X variable", setdiff(all_vars$desc, "ordination"), all_vars$desc[2])
+                                       ),
+                                       column(4,
+                                              selectizeInput("yvar", "Y variable", setdiff(all_vars$desc, "ordination"), all_vars$desc[1])
+                                       ),
+                                       column(4,
+                                              selectizeInput("color", "Color variable", all_vars$desc[c(13:11, 14, 1:10)], all_vars$desc[13])
+                                       )
+                                 ),
+                                 hr(),
+                                 fluidRow( column(4, h5("Download ", actionLink("i_download", "[?]"))) ),
+                                 fluidRow( column(4, downloadButton("download", "")) )
+                                 
+                          ),
+                          column(8,
+                                 leafletOutput("map", height=1000)
+                          )
+                 ),
+                 
+                 tabPanel("Instructions",
+                          fluidRow(
+                                column(12,
+                                       br(),
+                                       tags$img(src="logo5.png", width="200px", align="center"),
+                                       br(),
+                                       uiOutput('instructions')
+                                )
+                          )
+                 ),
+                 
+                 tabPanel("About",
+                          fluidRow(
+                                column(12,
+                                       br(),
+                                       tags$img(src="logo5.png", width="200px", align="center"),
+                                       br(),
+                                       uiOutput('about')
+                                )
+                          )
+                 ),
 )
+
 
 
 server <- function(input, output, session) {
       
-      showModal(modalDialog(
-            title="Seeds of Change",
-            HTML("Welcome. This tool is aimed at helping to identify populations that may be suitable as seed sources for ecological restoration projects,",
-                 "incorporating data on species ranges, soil variation, and future climate change.",
-                 "<br><br>This version is an early prototype and still under development. Please contact mattkling@berkeley.edu with questions or bug reports."),
-            easyClose = TRUE, footer = modalButton("Dismiss")
-      ))
+      # showModal(modalDialog(
+      #       title="Seeds of Change",
+      #       HTML("Welcome. This tool is aimed at helping to identify populations that may be suitable as seed sources for ecological restoration projects,",
+      #            "incorporating data on species ranges, soil variation, and future climate change.",
+      #            "<br><br>This version is an early prototype and still under development. Please contact mattkling@berkeley.edu with questions or bug reports."),
+      #       easyClose = TRUE, footer = modalButton("Dismiss")
+      # ))
       
       observeEvent(input$i_species, 
                    {showModal(modalDialog(
-                         title="Species range maps",
-                         "The tool comes pre-loaded with geographic range maps for key species of California native plants.",
+                         title="Species",
+                         "The tool comes pre-loaded with estimated geographic range maps for most California native plant species.",
                          "Select a species to load its estimated California geographic range, which is modeled based on climate, distance to known observations, and landscape intactness.",
                          "We'll use the map to estimate the species' environmental tolerance, model gene flow among nearby populations, and hypothesize which populations will have suitable genetics for the planting site.",
+                         "Or for a generic species-agnostic analysis of environmental similarity between sites, enter 'NONE' in the species box.",
                          easyClose = TRUE, footer = modalButton("Dismiss") )) })
       observeEvent(input$i_radius, 
                    {showModal(modalDialog(
-                         title="Incorporating gene flow",
+                         title="Smoothing radius (km)",
                          "A source population's suitability as a genetic match for a planting site with the same environment depends on the population's historic balance between selection and gene flow.",
                          "The relative importance of gene swamping versus local adaptation is known to vary among species.",
                          "This parameter lets you set the size of the local neighborhood around each source population within which gene flow is expected to homogenize local adaptation.",
@@ -132,248 +216,447 @@ server <- function(input, output, session) {
                          easyClose = TRUE, footer = modalButton("Dismiss") )) })
       observeEvent(input$i_time, 
                    {showModal(modalDialog(
-                         title="Climate change is a moving target",
+                         title="Time period",
                          "This tool estimates how well the historic adaptive environment at each provenance site matches the projected future environment at the planting site.",
                          "For which future planting site time period would you like to estimate historic climatic similarity?",
                          easyClose = TRUE, footer = modalButton("Dismiss") )) })
-      observeEvent(input$i_basis, 
+      observeEvent(input$i_ssp, 
                    {showModal(modalDialog(
-                         title="Climate distance metric",
-                         "The climatic difference 'sigma' between the planting site and each source population is expressed as a number of standard deviations.", 
-                         "You can select whether this is based on variation among climate models, in which case sigma reflects the likelihood of a future climate match,",
-                         "or on variation across the species California range, in which case sigma reflects difference in terms of realized niche breadth.",
-                         "(Note that soil similarity is always calculated using the range method.)",
+                         title="Shared socio-economic pathway",
+                         "For which future SSP would you like to estimate historic climatic similarity?",
                          easyClose = TRUE, footer = modalButton("Dismiss") )) })
+      # observeEvent(input$i_basis, 
+      #              {showModal(modalDialog(
+      #                    title="Climate distance metric",
+      #                    "The climatic difference 'sigma' between the planting site and each source population is expressed as a number of standard deviations.", 
+      #                    "You can select whether this is based on variation among climate models, in which case sigma reflects the likelihood of a future climate match,",
+      #                    "or on variation across the species California range, in which case sigma reflects difference in terms of realized niche breadth.",
+      #                    "(Note that soil similarity is always calculated using the range method.)",
+      #                    easyClose = TRUE, footer = modalButton("Dismiss") )) })
       observeEvent(input$i_weight, 
                    {showModal(modalDialog(
-                         title="Climate versus soil",
-                         "By default soil and climate are given equal weight when calculating similarity to the planting site environment.", 
-                         "Adjust this slder to incorporate species-specific knowledge about their relative importance in shaping local adaptation,",
+                         title="Soils versus climate",
+                         "By default, soil and climate are given equal weight when calculating similarity to the target site environment.", 
+                         "Adjust this slider to incorporate species-specific knowledge about their relative importance in shaping local adaptation,",
                          "or to explore how the results change based on assumptions about their importance.",
+                         easyClose = TRUE, footer = modalButton("Dismiss") )) })
+      observeEvent(input$i_constrain, 
+                   {showModal(modalDialog(
+                         title="Limit to species range",
+                         "Check this box to limit prospective planting sites to locations in the species' current modeled range.",
+                         "Uncheck it to consider all of California.", 
+                         easyClose = TRUE, footer = modalButton("Dismiss") )) })
+      observeEvent(input$i_mode, 
+                   {showModal(modalDialog(
+                         title="Target site activity",
+                         "Select whether the selected focal location is a 'planting' or 'collection' site.",
+                         "If it's a planting site, its environment in the selected time period will be compared to historic smoothed environments across the species range.", 
+                         "If it's a collection site, its historic smoothed environment will be compared to range-wide environments from the selected time period.", 
+                         easyClose = TRUE, footer = modalButton("Dismiss") )) })
+      observeEvent(input$i_download, 
+                   {showModal(modalDialog(
+                         title="Download results",
+                         "Click the 'download' button to save a raster file with the 'combined sigma' data for the current settings.",
+                         easyClose = TRUE, footer = modalButton("Dismiss") )) })
+      observeEvent(input$i_location, 
+                   {showModal(modalDialog(
+                         title="Select a target location",
+                         "To choose a focal site, click the map or enter 'Lon, Lat' in the box and press ENTER.",
                          easyClose = TRUE, footer = modalButton("Dismiss") )) })
       
       
       
+      txt2html <- function(x){
+            rawText <- readLines(x)
+            splitText <- stringi::stri_split(str = rawText, regex = '\\n')
+            replacedText <- lapply(splitText, p)
+            return(replacedText)
+      }
+      output$instructions <- renderUI({ txt2html("instructions")})
+      output$about <- renderUI({ txt2html("about")})
       
-      # default planting site location: presidio
-      s <- data.frame(species=NA, lat=37.801064, lon=-122.478557)
-      coordinates(s) <- c("lon", "lat")
-      crs(s) <- ll
+      
+      
       site <- reactiveValues(point = s)
       
-      # update planting site when map is clicked
+      # update focal site when map is clicked
       observeEvent(input$map_click, {
             s <- data.frame(species=NA, lat=input$map_click$lat, lon=input$map_click$lng)
+            updateTextInput(session, "lonlat", value = paste(round(s$lon, 2), round(s$lat, 2), sep = ", "))
             coordinates(s) <- c("lon", "lat")
             crs(s) <- ll
             site$point <- s
       })
       
-      
-      # future environment at planting site
-      site_future <- reactive({
-            time <- input$time
-            
-            clim_mean <- stackBands(clim_files$path[clim_files$year==time], 1) %>% extract(site$point) %>% as.vector()
-            clim_sd <- stackBands(clim_files$path[clim_files$year==time], 2) %>% extract(site$point) %>% as.vector()
-            names(clim_mean) <- names(clim_sd) <- vars
-            nclimdim <- length(clim_mean)
-            
-            soil_mean <- extract(soil_all, site$point)
-            colnames(soil_mean) <- paste0("soil_PC", 1:ncol(soil_mean))
-            nsoildim <- length(soil_mean)
-            
-            list(clim_mean = clim_mean,
-                 clim_sd = clim_sd,
-                 clim_ndim = nclimdim,
-                 soil_mean = soil_mean,
-                 soil_ndim = nsoildim)
+      # update focal site via input text
+      observeEvent(input$keyPressed, {
+            crds <- as.numeric(stringr::str_split(input$lonlat, ", ")[[1]])
+            s <- data.frame(species=NA, lat=crds[2], lon=crds[1])
+            coordinates(s) <- c("lon", "lat")
+            crs(s) <- ll
+            site$point <- s
+            # site$ll <- coordinates(s)
       })
       
-      # historic climate at provenance sites
+      output$constraintControls <- renderUI({
+            if(input$mode == "collection") checkboxInput("constrain", span("Limit results to species range", actionLink("i_constrain", "[?]")), TRUE)
+      })
+      
+      ssp_sel <- reactiveValues(sel = "ssp585")
+      observeEvent(input$ssp, { ssp_sel$sel <- c(ssp_sel$sel, input$ssp) })
+      
+      observe({
+            baseline <- as.character(input$time == "1981-2010")
+            updateSelectInput(session, "ssp",
+                              choices = switch(baseline, 
+                                               "TRUE" = "historic",
+                                               "FALSE" = setdiff(ssps, "historic")),
+                              selected = ifelse(baseline == "TRUE", 
+                                                "historic", tail(ssp_sel$sel[ssp_sel$sel != "historic"], 1)))
+      })
+      
+      
+      # historic
       smoothed_envt <- reactive({
-            smoothed %>% 
+            req(input$sp)
+            y <- smoothed %>% 
                   filter(gs==input$sp,
                          radius==input$radius) %>%
                   pull(path) %>%
-                  readRDS()
+                  terra::rast()
+            names(y) <- sub("800m_", "PC", names(y))
+            return(list(clim = y[[6:10]],
+                        soil = y[[1:5]]))
+      })
+      
+      ref_envt <- list(clim = stackBands(clim_files$path[clim_files$year=="1981-2010"], 1) %>%
+                             rast() %>%
+                             setNames(vars))
+      
+      # future 
+      future_envt <- reactive({
+            time <- input$time
+            ssp <- input$ssp
+            if(time == times[1]) ssp <- ssps[1]
+            clim_mean <- stackBands(clim_files$path[clim_files$year==time & clim_files$ssp==ssp], 1) %>% rast()
+            clim_sd <- stackBands(clim_files$path[clim_files$year==time & clim_files$ssp==ssp], 2) %>% rast()
+            names(clim_mean) <- vars
+            names(clim_sd) <- vars
+            list(clim = clim_mean,
+                 clim_sd = clim_sd,
+                 soil = soil_all)
+      })
+      
+      # reference climate across range (historic if planting mode)
+      range_envt <- reactive({
+            y <- switch(input$mode,
+                        "planting" = smoothed_envt(),
+                        "collection" = future_envt() )
+            if(input$mode == "collection"){
+                  if(!is.null(input$constrain)){
+                        if(input$constrain) y <- y %>%
+                                    map(crop, y = smoothed_envt()[[1]][[1]]) %>%
+                                    map(raster::mask, mask = smoothed_envt()[[1]][[1]])
+                  }
+            }
+            return(y)
+      })
+      
+      # gcm_var <- reactive({
+      #       x <- smoothed_envt()$clim[[1]]
+      #       ss <- sample_n(as.data.frame(rasterToPoints(x)), 10)[,1:2]
+      #       coordinates(ss) <- c("x", "y")
+      #       crs(ss) <- ll
+      #       ss <- rbind(ss, site$point)
+      #       future_envt() %>% map(extract, y = ss)
+      # })
+      
+      # target environment at selected site (future if planting mode)
+      target_envt <- reactive({
+            # if(input$time == times[1]) browser()
+            future <- future_envt() %>% map(extract, y = coordinates(site$point)) %>% map(as.vector)
+            historic <- smoothed_envt() %>% map(extract, y = coordinates(site$point)) %>% map(as.vector)
+            reference <- ref_envt %>% map(extract, y = coordinates(site$point)) %>% map(as.vector)
+            te <- list(focal = switch(input$mode, "planting" = future, "collection" = historic),
+                       reference = switch(input$mode, "planting" = reference, "collection" = future))
+            if(all(is.na(te$focal$clim))){
+                  showModal(modalDialog(
+                        title="Oops", "It seems your selected location is outside the allowed area. Please choose a site in California, and if target site is set to 'collection', please choose a site within the species range.",
+                        easyClose = TRUE, footer = modalButton("Dismiss") ))
+                  updateSelectInput(session, "mode", selected = "planting")
+            }
+            return(te)
       })
       
       range_stats <- reactive({
-            list(clim_mean = cellStats(smoothed_envt()$clim, "mean"),
-                 clim_sd = cellStats(smoothed_envt()$clim, "sd", asSample=F),
-                 soil_mean = cellStats(smoothed_envt()$soil, "mean"),
-                 soil_sd = cellStats(smoothed_envt()$soil, "sd", asSample=F))
-      })
-      
-      # climate differences between source populations and future planting site 
-      clim_sigmas <- reactive({
-            if(input$climstat=="GCM ensemble"){
-                  site_mean <- site_future()$clim_mean
-                  site_sd <- site_future()$clim_sd
-                  ndim <- site_future()$clim_ndim
-                  
-                  sigma <- function(x, ...){
-                        if(is.na(x[1])) return(NA)
-                        sum((x - site_mean)^2 / site_sd^2) %>% 
-                              pchisq(ndim) %>% 
-                              qchisq(1) %>% 
-                              sqrt()
-                  }
-                  clim_prob <- calc(smoothed_envt()$clim, sigma) %>%
-                        reclassify(c(10, Inf, 10))
-            }
-            if(input$climstat=="species niche"){
-                  clim <- smoothed_envt()$clim
-                  range_mean <- range_stats()$clim_mean
-                  range_sd <- range_stats()$clim_sd
-                  clim <- (clim - range_mean) / range_sd
-                  
-                  site_mean <- (site_future()$clim_mean - range_mean) / range_sd
-                  ndim <- site_future()$clim_ndim
-                  
-                  sigma <- function(x, ...){
-                        if(is.na(x[1])) return(NA)
-                        sum((x - site_mean)^2) %>% 
-                              pchisq(ndim) %>% 
-                              qchisq(1) %>% 
-                              sqrt()
-                  }
-                  clim_prob <- calc(clim, sigma) %>%
-                        reclassify(c(10, Inf, 10))
-            }
-            clim_prob
+            y <- filter(range_summaries,
+                        species == input$sp)
+            list(clim_mean = y$mean[6:10],
+                 clim_sd = y$sd[6:10],
+                 soil_mean = y$mean[1:5],
+                 soil_sd = y$sd[1:5])
       })
       
       # soil differences
       soil_sigmas <- reactive({
-            
-            soil <- smoothed_envt()$soil
+            x <- range_envt()$soil
             range_mean <- range_stats()$soil_mean
             range_sd <- range_stats()$soil_sd
-            soil <- (soil - range_mean) / range_sd
-            
-            site_mean <- (site_future()$soil_mean - range_mean) / range_sd
-            ndim <- site_future()$soil_ndim
-            
-            sigma <- function(x, ...){
-                  if(is.na(x[1])) return(NA)
-                  sum((x - site_mean)^2) %>%
-                        pchisq(ndim) %>% 
-                        qchisq(1) %>% 
-                        sqrt()
-            }
-            soil_prob <- calc(soil, sigma) %>%
-                  reclassify(c(10, Inf, 10))
-            
-            soil_prob
+            x <- (x - range_mean) / range_sd
+            site_mean <- (unlist(target_envt()$focal$soil) - range_mean) / range_sd
+            sigma(x, site_mean)
+      })
+      
+      # climate differences
+      clim_sigmas <- reactive({
+            x <- range_envt()$clim
+            range_mean <- range_stats()$clim_mean
+            range_sd <- range_stats()$clim_sd
+            x <- (x - range_mean) / range_sd
+            site_mean <- (unlist(target_envt()$focal$clim) - range_mean) / range_sd
+            sigma(x, site_mean)
       })
       
       # overall dissimilarity combining soil and climate
       final <- reactive({
-            prob <- (clim_sigmas() * input$pclim) + (soil_sigmas() * (1-input$pclim))
-            
-            d <- stack(smoothed_envt()$clim, smoothed_envt()$soil, 
-                       clim_sigmas(), soil_sigmas(), prob)
-            names(d) <- all_vars
-            list(rasters=d)
+            pc <- input$pclim / 100
+            req(clim_sigmas(), soil_sigmas())
+            prob <- (clim_sigmas() * pc) + (soil_sigmas() * (1-pc))
+            d <- c(range_envt()$clim, range_envt()$soil, clim_sigmas(), soil_sigmas(), prob)
+            names(d) <- setdiff(all_vars$abbv, "rgb")
+            return(d)
       })
       
       
       
-      
-      colors <- c("red", "yellow", "green", "blue", "darkblue", "black")
-      colors <- c("red", "#FDE725FF", "#5DC863FF", "#21908CFF", "#3B528BFF", "#440154FF", "black")
+      sigma_pal <- c("red", "#FDE725FF", "#5DC863FF", "#21908CFF", "#3B528BFF", "#440154FF", "black")
+      viridis_pal <- rev(c("#FDE725FF", "#5DC863FF", "#21908CFF", "#3B528BFF", "#440154FF", "black"))
       
       icon <- makeAwesomeIcon("leaf", markerColor="red")
       
+      rgb_raster <- reactive({
+            req(final)
+            f <- values(final()[[1:10]])
+            a <- which(is.finite(rowSums(f)))
+            v <- scale(na.omit(f))
+            v[,1:5] <- v[,1:5] * input$pclim/100 * 2
+            v[,6:10] <- v[,6:10] * (1-input$pclim/100) * 2
+            v <- apply(prcomp(v)$x[,1:3], 2,
+                       function(x) (rank(x)-1)/(length(x)-1))
+            v <- v[, sample(1:3, 3)] # permute columns
+            clr <- final()[[1:3]] %>% setValues(NA)
+            for(i in 1:3){
+                  if(sample(c(T, F), 1)){
+                        clr[[i]][a] <- v[,i]
+                  }else{clr[[i]][a] <- 1-v[,i]}
+            }
+            clr <- clr * 255 * .8 # scale to avoid white
+            RGB(clr) <- 1:3
+            names(clr) <- c("r", "g", "b")
+            clr
+      })
+      
       output$map <- renderLeaflet({
-            
-            withProgress(message = "Stand by.", 
-                         value = 0, {
-                               incProgress(.25, detail = "Computing climate similarities.")
-                               x <- clim_sigmas()
-                               incProgress(.5, detail = "Computing soil similarities.")
-                               x <- soil_sigmas()
-                               
-                               incProgress(.75, detail = "Merging dimensions.")
-                               r <- final()$rasters[[input$color]]
-                               
-                               incProgress(1, detail = "Generating plots.")
-                               #browser()
-                               pal <- colorNumeric(colors,
-                                                   c(0, values(r)),
-                                                   na.color = "transparent")
-                               
-                               latlon <- coordinates(site$point)
-                               
-                               #Stamen.TonerBackground
-                               #Esri.WorldTerrain
-                               #Esri.WorldGrayCanvas
-                               leaflet() %>%
-                                     setView(lng=latlon[1], lat=latlon[2], zoom=10) %>%
-                                     addProviderTiles(providers$Esri.WorldGrayCanvas) %>%
-                                     addRasterImage(r, colors=pal, opacity=0.8) %>%
-                                     addAwesomeMarkers(lng=latlon[1], lat=latlon[2], icon=icon) %>%
-                                     addLegend(pal=pal, values=c(0, values(r)),
-                                               opacity=0.8, title="Sigma")
-                               
-                         })
+            leaflet() %>%
+                  setView(lng=coordinates(s)[1], lat=coordinates(s)[2], zoom=9) %>%
+                  addProviderTiles(providers$Esri.WorldGrayCanvas)
+      })
+      
+      observe({
+            withProgress(
+                  message = "Stand by.", 
+                  value = 0, 
+                  {
+                        incProgress(.25, detail = "Computing climate similarities.")
+                        x <- clim_sigmas()
+                        incProgress(.5, detail = "Computing soil similarities.")
+                        x <- soil_sigmas()
+                        
+                        incProgress(.75, detail = "Merging dimensions.")
+                        
+                        v <- all_vars[all_vars$desc == input$color, ]
+                        
+                        f <- final()
+                        incProgress(1, detail = "Generating plots.")
+                        
+                        latlon <- coordinates(site$point)
+                        req(final())
+                        # browser()
+                        if(input$color == "Ordination"){
+                              leafletProxy("map") %>% clearMarkers() %>% clearImages() %>%
+                                    addRasterImage(rgb_raster(), opacity=0.8) %>%
+                                    addAwesomeMarkers(lng=latlon[1], lat=latlon[2], icon=icon)
+                        }else{
+                              r <- f[[v$abbv]]
+                              pal <- colorNumeric(switch(v$palette, "sigma" = sigma_pal, "viridis" = viridis_pal),
+                                                  c(v$min, values(r)),
+                                                  na.color = "transparent")
+                              leafletProxy("map") %>% clearMarkers() %>% clearImages() %>%
+                                    addRasterImage(r, colors=pal, opacity=0.8) %>%
+                                    addAwesomeMarkers(lng=latlon[1], lat=latlon[2], icon=icon)
+                        }
+                        
+                  })
       })
       
       output$scatter <- renderPlot({
             
-            vx <- input$xvar
-            vy <- input$yvar
-            vc <- input$color
-            #browser()
-            d <- final()$rasters[[c(vx, vy, vc)]] %>%
-                  rasterToPoints() %>% as.data.frame() %>%
-                  na.omit() %>%
-                  sample_n(nrow(.))
-            names(d)[3:5] <- c("xvar", "yvar", "cvar")
+            # future climate mean, and sd of either ensemble or niche
+            avg <- c(target_envt()$focal$clim, target_envt()$focal$soil) %>% unlist()
+            ref <- c(target_envt()$reference$clim, target_envt()$focal$soil) %>% unlist()
+            std <- c(range_stats()$clim_sd, range_stats()$soil_sd) %>% unlist()
+            names(avg) <- names(std) <- names(ref) <- all_vars$abbv[1:length(avg)]
             
-            # future climate mean, and sd of either ensemble or niche 
-            avg <- c(site_future()$clim_mean, site_future()$soil_mean)
-            if(input$climstat == "GCM ensemble"){
-                  std <- c(site_future()$clim_sd, range_stats()$soil_sd)
+            
+            vx <- all_vars$abbv[all_vars$desc == input$xvar]
+            vy <- all_vars$abbv[all_vars$desc == input$yvar]
+            vc <- all_vars$abbv[all_vars$desc == input$color]
+            
+            req(final())
+            f <- final()
+            if(vc == "rgb"){
+                  d <- c(final(), rgb_raster())[[c(vx, vy, c("r", "g", "b"))]] %>% as.data.frame() %>% na.omit()
+                  d$rgb <- rgb(d$r, d$g, d$b, maxColorValue = 255)
+                  d <- select(d, -r, -g, -b)
             }else{
-                  std <- c(range_stats()$clim_sd, range_stats()$soil_sd)
+                  d <- f[[c(vx, vy, vc)]] %>% as.data.frame() %>% na.omit()
             }
-            names(avg) <- names(std) <- all_vars[1:length(avg)]
             
+            # compute range on full data set, and then subsample data
+            minmax <- range(d[[vc]], na.rm = T)
+            maxpoints <- 10000
+            names(d) <- c("xvar", "yvar", "cvar")
+            d <- d %>% sample_n(min(maxpoints, nrow(.)))
+            
+            
+            # vc <- all_vars[all_vars$desc == input$color, ]
             fill_col <- NA
             
-            ggplot() +
-                  geom_point(data=d, aes(xvar, yvar, color=cvar), size=.5) +
-                  scale_color_gradientn(colours=colors, limits=c(0, NA)) +
-                  #annotate("point", color="red", shape=3, size=8,
-                  #         x=avg[vx], y=avg[vy]) +
-                  annotate("linerange", color="red", size=.5,
-                           x=avg[vx], 
-                           ymin=avg[vy] + std[vy]*c(-.5, .5), 
-                           ymax=avg[vy] + std[vy]*c(-2.5, 2.5)) +
-                  annotate("segment", color="red", size=.5,
-                           y=avg[vy], yend=avg[vy], 
-                           x=avg[vx] + std[vx]*c(-.5, .5), 
-                           xend=avg[vx] + std[vx]*c(-2.5, 2.5)) +
-                  annotate("polygon", color="red", fill=fill_col, size=.5,
-                           x=avg[vx] + std[vx] * cos(seq(0,2*pi,length.out=100)),
-                           y=avg[vy] + std[vy] * sin(seq(0,2*pi,length.out=100))) +
-                  annotate("polygon", color="red", fill=fill_col, size=.5, 
-                           x=avg[vx] + std[vx]*2 * cos(seq(0,2*pi,length.out=100)),
-                           y=avg[vy] + std[vy]*2 * sin(seq(0,2*pi,length.out=100))) +
-                  #annotate("segment", color="red",
-                  #         x=hst[vx], y=hst[vy], xend=fut[vx], yend=fut[vy],
-                  #         arrow=grid::arrow(type="closed", angle=15, length=unit(.15, "in"))) +
-                  coord_fixed(ratio = std[vx]/std[vy]) +
+            
+            
+            
+            x_label <- paste0(input$xvar, " ", all_vars$units[all_vars$desc == input$xvar])
+            y_label <- paste(input$yvar, all_vars$units[all_vars$desc == input$yvar])
+            
+            
+            
+            # gcm uncertainty
+            # gcmv <- gcm_var()
+            # bubbles <- tibble(x = gcmv$clim[,vx],
+            #                   y = gcmv$clim[,vy],
+            #                   xsd = gcmv$clim_sd[,vx],
+            #                   ysd = gcmv$clim_sd[,vy],
+            #                   group = 1:length(x)) %>%
+            #       expand_grid(id = 1:100,
+            #                   sd = 1:2) %>%
+            #       mutate(dx = cos(seq(0,2*pi,length.out=100))[id],
+            #              dy = sin(seq(0,2*pi,length.out=100))[id]) %>%
+            #       mutate(x = x + xsd * dx * sd,
+            #              y = y + ysd * dy * sd)
+            
+            # plot
+            req(d, vc)
+            
+            vci <- all_vars[all_vars$desc == input$color, ]
+            scatter <- ggplot() +
+                  geom_point(data = d, aes(xvar, yvar, color = cvar), size = .5) +
                   theme_minimal() +
-                  theme(legend.position="none") +
-                  labs(x=vx, y=vy, color=vc)
+                  theme(legend.position = "right") +
+                  labs(x = x_label, y = y_label, color = NULL)
+            
+            if(vc == "rgb"){
+                  scatter <- scatter + 
+                        guides(color = guide_colorsteps()) +
+                        scale_color_identity()
+            }else{
+                  scatter <- scatter + 
+                        guides(color = guide_colorbar(barheight = 12)) +
+                        scale_color_gradientn(colours = switch(vci$palette, "sigma" = sigma_pal, "viridis" = viridis_pal), 
+                                              limits = c(ifelse(is.na(vci$min), minmax[1], vci$min), minmax[2]))
+            }
+            
+            
+            
+            # geom_polygon(data = bubbles, aes(x, y, group = paste(group, sd)),
+            #              color = "black", fill = NA) + 
+            
+            # annotate("linerange", color="red", size=.5,
+            #          x=avg[vx], 
+            #          ymin=avg[vy] + std[vy]*c(-.5, .5), 
+            #          ymax=avg[vy] + std[vy]*c(-2.5, 2.5)) +
+            # annotate("segment", color="red", size=.5,
+            #          y=avg[vy], yend=avg[vy], 
+            #          x=avg[vx] + std[vx]*c(-.5, .5), 
+            #          xend=avg[vx] + std[vx]*c(-2.5, 2.5)) +
+            
+            # annotate("point", color="red", shape=3, size=8,
+            #          x=avg[vx], y=avg[vy]) +
+            # annotate("polygon", color="red", fill=fill_col, size=.5,
+            #          x=avg[vx] + std[vx] * cos(seq(0,2*pi,length.out=100)),
+            #          y=avg[vy] + std[vy] * sin(seq(0,2*pi,length.out=100))) +
+            # annotate("polygon", color="red", fill=fill_col, size=.5,
+            #          x=avg[vx] + std[vx]*2 * cos(seq(0,2*pi,length.out=100)),
+            #          y=avg[vy] + std[vy]*2 * sin(seq(0,2*pi,length.out=100))) +
+            # annotate("segment", color="black",
+            #          x=ref[vx], y=ref[vy], xend=avg[vx], yend=avg[vy],
+            #          arrow=grid::arrow(type="closed", angle=15, length=unit(.15, "in"),
+            #                            ends = ifelse(input$time == "1981-2010", "first", "last"))) +
+            
+            # coord_fixed(ratio = std[vx]/std[vy]) +
+            
+            
+            if(!grepl("plot", paste(vx, vy))){
+                  req(scatter)
+                  scatter <- scatter +
+                        annotate("segment", color="black", linewidth = 1.5,
+                                 x=ref[vx], y=ref[vy], xend=avg[vx], yend=avg[vy],
+                                 arrow=grid::arrow(type="closed", angle=15, length=unit(.15, "in"),
+                                                   ends = ifelse(input$mode == "collection", "first", "last"))) +
+                        annotate("segment", color="red", linewidth = 1,
+                                 x=ref[vx], y=ref[vy], xend=avg[vx], yend=avg[vy],
+                                 arrow=grid::arrow(type="closed", angle=15, length=unit(.15, "in"),
+                                                   ends = ifelse(input$mode == "collection", "first", "last")))
+            }
+            
+            return(scatter)
       })
+      
+      
+      output$target_label <- renderText({ paste0("Target: ", input$mode, " site (",
+                                                 ifelse(input$mode == "planting", 
+                                                        paste0(input$time, ", ", input$ssp), 
+                                                        paste0(times[1], ifelse(input$radius == 0, "", ", smoothed"))), 
+                                                 ", +/-2 range SD)") })
+      output$points_label <- renderText({ paste0("Points: potential ", setdiff(c("planting", "collection"), input$mode), " sites (",
+                                                 ifelse(input$mode == "planting", 
+                                                        paste0(times[1], ifelse(input$radius == 0, "", ", smoothed")), 
+                                                        paste0(input$time, ", ", input$ssp)), ")") })
+      output$color_label <- renderText({ paste("Color of map & points:", input$color,
+                                               all_vars$units[all_vars$desc == input$color]) })
+      
+      
+      
+      # data download
+      output$download <- downloadHandler(
+            filename = function() {
+                  ll <- coordinates(site$point)
+                  paste0("sigma", 
+                         "_", str_replace(input$sp, " ", "-"), 
+                         "_", input$mode, 
+                         "_pclim", input$pclim, 
+                         "_r", input$radius, "km",
+                         "_", input$time, 
+                         "_", input$ssp, 
+                         "_", round(ll[1], 2), "E",
+                         "_", round(ll[2], 2), "N",
+                         ".tif")
+            },
+            content = function(file) {
+                  writeRaster(final()$prob, file)
+            }
+      )
       
 }
 
 # Run the application
 shinyApp(ui = ui, server = server)
-
