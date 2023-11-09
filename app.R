@@ -13,6 +13,7 @@ library(terra)
 library(grid)
 library(ecoclim)
 library(purrr)
+library(stringr)
 select <- dplyr::select
 extract <- terra::extract
 
@@ -356,7 +357,7 @@ server <- function(input, output, session) {
                   if(!is.null(input$constrain)){
                         if(input$constrain) y <- y %>%
                                     map(crop, y = smoothed_envt()[[1]][[1]]) %>%
-                                    map(raster::mask, mask = smoothed_envt()[[1]][[1]])
+                                    map(terra::mask, mask = smoothed_envt()[[1]][[1]])
                   }
             }
             return(y)
