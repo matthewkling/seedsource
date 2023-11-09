@@ -18,8 +18,6 @@ spp <- read.csv("focal_species.csv", stringsAsFactors = F)
 key_spp <- spp$Species
 
 
-
-
 ### climate ensemble summaries ####
 
 clim <- data.frame(path=list.files("~/data/seeds/chelsa_derived", recursive=T, full.names=T),
