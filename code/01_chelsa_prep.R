@@ -8,11 +8,11 @@ library(tidyverse)
 
 #### crop global rasters to study extent ####
 
-f <- c(list.files("F:/chelsa/cmip5", full.names=T),
-       list.files("F:/chelsa/monthly48", full.names=T))
+# f <- c(list.files("F:/chelsa/cmip5", full.names=T),
+#        list.files("F:/chelsa/monthly48", full.names=T))
 
 cropNsave <- function(x){
-      outfile <- paste0("F:/seeds/chelsa_cropped/", basename(x))
+      outfile <- paste0("~/data/seeds/chelsa_cropped/", basename(x))
       if(file.exists(outfile)) return("skipped")
       r <- raster(x)
       e <- extent(-125, -114, 28, 45)
@@ -20,23 +20,27 @@ cropNsave <- function(x){
       writeRaster(r, outfile, overwrite=T)
 }
 
+f <- c(list.files("~/data/CHELSA/v2/cmip/", full.names = T))
 sapply(f, cropNsave)
 
+f <- c(list.files("~/data/CHELSA/v2/raw/", full.names = T))
+f <- f[grepl("_tas|_pr_", f)]
+sapply(f, cropNsave)
 
 
 #### parse metadata for raster files ####
 
-md <- data.frame(path=list.files("F:/seeds/chelsa_cropped/", full.names=T), stringsAsFactors=F) %>%
-      mutate(file=basename(path))
-mdh <- filter(md, grepl("land", file)) %>%
-      separate(file, c("junk1", "variable", "month", "junk2", "junk3")) %>%
+md <- tibble(path = list.files("~/data/seeds/chelsa_cropped/", full.names = T),
+             file = basename(path))
+mdh <- filter(md, grepl("1981-2010", file)) %>%
+      separate(file, c("junk1", "variable", "month", "junk2", "junk3"), sep = "_") %>%
       dplyr::select(-contains("junk")) %>%
-      mutate(timeframe="1979-2013")
-mdf <- filter(md, !grepl("land", file)) %>%
-      separate(file, c("junk1", "variable", "junk2", "model", "scenario", 
-                       "junk3", "junk4", "month", "timeframe"), sep="_") %>%
-      dplyr::select(-contains("junk")) %>%
-      mutate(timeframe=gsub("\\.tif", "", timeframe))
+      mutate(timeframe = "1981-2010")
+mdf <- filter(md, !grepl("1981-2010|_bio", file)) %>%
+      separate(file, c("junk1", "model", "junk2", "junk3", "scenario",  "variable",  
+                       "month", "year", "year2", "junk4"), sep="_") %>%
+      mutate(timeframe = paste0(year, "-", year2)) %>%
+      dplyr::select(-contains("junk"), -year, -year2)
 md <- full_join(mdf, mdh) %>%
       mutate(variable=case_when(variable=="temp10" ~ "tas",
                                 variable=="tmax10" ~ "tasmax",
@@ -58,27 +62,25 @@ md <- full_join(mdf, mdh) %>%
 
 derive <- function(data){
       
-      outfile <- paste0("F:/seeds/chelsa_derived/", data$set[1], ".tif")
+      message(data$set[1])
+      outfile <- paste0("~/data/seeds/chelsa_derived/", data$set[1], ".tif")
       if(file.exists(outfile)) return("skipped")
       
-      message(data$set[1])
+      require(hydro)
       
-      # water balance variables
-      source("e:/chilefornia/chilefornia/water_balance.R")
-      lat <- latitude(data$path[1], already_latlong=T)
-      r <- stack(c(data$path, lat)) %>%
-            reclassify(c(-Inf, -1000, NA))
-      names(r) <- c(paste0(data$variable, data$month), "latitude")
-      water <- water_balance(r, temp_scalar=0.1, ncores=6)
+      r <- stack(data$path)
+      for(i in 1:12) r[[i]] <- r[[i]] / 10
+      for(i in 13:48) r[[i]] <- r[[i]] / 10 - 273.15
+      water <- hydro(r, already_latlong = T, ncores = 6)
       
       # seasonal temperature extremes
-      djf <- mean(r[[c("tasmin12", "tasmin01", "tasmin02")]]/10)
-      jja <- mean(r[[c("tasmax06", "tasmax07", "tasmax08")]]/10)
+      djf <- mean(r[[c(37, 38, 48)]])
+      jja <- mean(r[[30:32]])
       
       # export
-      writeRaster(stack(water, djf, jja), 
-                  outfile, 
-                  overwrite=T)
+      terra::writeRaster(terra::rast(stack(water, djf, jja)), 
+                         outfile, 
+                         overwrite = T)
 }
 
 mds <- split(md, md$set)
