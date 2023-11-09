@@ -48,7 +48,7 @@ smoothed <- data.frame(path=list.files(paste0(assets, "smooth"), full.names=T),
              radius = as.integer(radius)) %>%
       select(path, gs, radius)
 
-range_summaries <- readRDS(paste0(assets, "range_stats.rds"))
+range_summaries <- readRDS("assets/range_stats.rds")
 
 ll <- crs("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
 
@@ -269,11 +269,11 @@ server <- function(input, output, session) {
       txt2html <- function(x){
             rawText <- readLines(x)
             splitText <- stringi::stri_split(str = rawText, regex = '\\n')
-            replacedText <- lapply(splitText, p)
+            replacedText <- lapply(splitText, shiny::p)
             return(replacedText)
       }
-      output$instructions <- renderUI({ txt2html("instructions")})
-      output$about <- renderUI({ txt2html("about")})
+      output$instructions <- renderUI({ txt2html("assets/instructions") })
+      output$about <- renderUI({ txt2html("assets/about") })
       
       
       
