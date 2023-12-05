@@ -233,3 +233,15 @@ sm <- future_map(key_spp, sp_smooth, indir = "assets/select_species/ranges/", ou
 f <- list.files("assets/climate/", full.names = T)
 msk <- rast("assets/all_species/smooth/NONE 0.tif")[[1]]
 map(f, function(x) x %>% rast() %>% crop(msk) %>% mask(msk) %>% writeRaster(x, overwrite = T) )
+
+
+
+ff <- f[grepl("ssp", f)]
+hh <- f[!grepl("ssp|soil", f)]
+for(fi in ff){
+      var <- str_remove(basename(fi), "\\.tif") %>%
+            str_sub(-3, -1)
+      hi <- hh[grepl(var, hh)]
+      delta <- rast(fi)[[1]] - rast(hi)[[1]]
+      writeRaster(delta, fi %>% str_replace("climate", "deltas") %>% str_replace("ensemble", "delta"), overwrite = T)
+}
