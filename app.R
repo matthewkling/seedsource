@@ -39,6 +39,7 @@ ssps <- data.frame(ssp = ssps,
                                         str_sub(ssps, 6, 6))))
 
 spps <- list.files(paste0(assets, "ranges")) %>% sub("\\.tif", "", .)
+allspps <- readRDS("assets/all_species.rds")
 
 soil_all <- rast("assets/climate/soil_800m.tif")
 names(soil_all) <- paste0("soil_PC", 1:nlyr(soil_all))
@@ -209,10 +210,11 @@ server <- function(input, output, session) {
       observeEvent(input$i_species, 
                    {showModal(modalDialog(
                          title="Species",
-                         "The tool comes pre-loaded with estimated geographic range maps for most California native plant species (only 25 species important for Bay Area restoration projects are included in this beta version, but 5200 species will be added).",
+                         HTML("The tool comes pre-loaded with estimated geographic range maps for most California native plant species (only 25 species important for Bay Area restoration projects are included in this beta version, but all 5221 species listed below will ultimately be added).",
                          "Select a species to load its estimated California geographic range, which is modeled based on climate, distance to known observations, and landscape intactness.",
                          "We'll use this distribution to estimate the species' environmental tolerance, model gene flow among nearby populations, and hypothesize which populations may be adapted to the environment of the selected focal site.",
-                         "Or for a generic species-agnostic analysis of environmental similarity between sites, enter 'NONE' in the species box.",
+                         "Or for a generic species-agnostic analysis of environmental similarity between sites, enter 'NONE' in the species box.<br><br>"),
+                         selectizeInput("allsp", "Full species list", choices = allspps), # not used server-side
                          easyClose = TRUE, footer = modalButton("Dismiss") )) })
       observeEvent(input$i_radius, 
                    {showModal(modalDialog(
