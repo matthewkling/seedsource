@@ -22,11 +22,18 @@ assets <- ifelse(dir.exists("assets/all_species"), "assets/all_species/", "asset
 
 # climate metadata
 vars <- sort(c("PPT", "AET", "CWD", "DJF", "JJA"))
-clim_files <- data.frame(path=list.files("assets/climate",
-                                         full.names=T, pattern="ensemble"),
-                         stringsAsFactors=F) %>%
-      mutate(set=gsub("\\.tif", "", basename(path))) %>%
-      separate(set, c("junk", "year", "ssp", "var"), remove=F, sep=" ") %>%
+# clim_files <- data.frame(path=list.files("assets/climate",
+#                                          full.names=T, pattern="ensemble"),
+#                          stringsAsFactors=F) %>%
+#       mutate(set=gsub("\\.tif", "", basename(path))) %>%
+#       separate(set, c("junk", "year", "ssp", "var"), remove=F, sep=" ") %>%
+#       select(-junk) %>%
+#       mutate(ssp = ifelse(ssp == "NA", "historic", toupper(ssp))) %>%
+#       filter(var %in% vars) %>% arrange(var)
+clim_files <- data.frame(path = list.files("assets/models", full.names = T),
+                         stringsAsFactors = F) %>%
+      mutate(set = gsub("\\.tif", "", basename(path))) %>%
+      separate(set, c("junk", "year", "ssp", "var"), remove = F, sep=" ") %>%
       select(-junk) %>%
       mutate(ssp = ifelse(ssp == "NA", "historic", toupper(ssp))) %>%
       filter(var %in% vars) %>% arrange(var)
@@ -110,7 +117,7 @@ ui <- navbarPage("Seeds of Change [BETA]",
                                  fluidRow(
                                        column(4,
                                               selectizeInput("sp", 
-                                                             span("Focal species ", actionLink("i_species", "[?]")), 
+                                                             span("Species ", actionLink("i_species", "[?]")), 
                                                              choices = spps, selected = "Quercus agrifolia"),
                                               textInput("lonlat",
                                                         span("Location ", actionLink("i_location", "[?]")), 
@@ -143,7 +150,7 @@ ui <- navbarPage("Seeds of Change [BETA]",
                                  ),
                                  hr(),
                                  fluidRow(
-                                       column(4, span(textOutput("target_label"), style="color:red")),
+                                       column(4, span(textOutput("target_label", inline = T), actionLink("i_arrows", "[?]"), style="color:red")),
                                        column(4, textOutput("points_label")),
                                        column(4, span(textOutput("color_label"), style="color:darkblue")),
                                  ),
@@ -159,8 +166,8 @@ ui <- navbarPage("Seeds of Change [BETA]",
                                        ),
                                        column(4,
                                               selectizeInput("color", "Color variable", 
-                                                          all_vars$desc[c(13:11, 14, 1:10, 15:19)], 
-                                                          all_vars$desc[13])
+                                                             all_vars$desc[c(13:11, 14, 1:10, 15:19)], 
+                                                             all_vars$desc[13])
                                        )
                                  ),
                                  hr(),
@@ -185,11 +192,14 @@ ui <- navbarPage("Seeds of Change [BETA]",
                  tabPanel("About",
                           fluidRow(
                                 column(12,
-                                       htmltools::includeMarkdown("assets/about.md"),
+                                       tags$img(src="BIPPB_logo.jpg", width="300px", align="center"),
                                        # tags$img(src="logo5.png", width="200px", align="center"),
                                        br(),
-                                       tags$img(src="BIPPB_logo.jpg", width="300px", align="center"),
-                                       
+                                       br(),
+                                       br(),
+                                       htmltools::includeMarkdown("assets/about.md"),
+                                       hr(),
+                                       downloadButton("downloadSpp", "Download full CA species list")
                                 )
                           )
                  )
@@ -211,9 +221,9 @@ server <- function(input, output, session) {
                    {showModal(modalDialog(
                          title="Species",
                          HTML("The tool comes pre-loaded with estimated geographic range maps for most California native plant species (only 25 species important for Bay Area restoration projects are included in this beta version, but all 5221 species listed below will ultimately be added).",
-                         "Select a species to load its estimated California geographic range, which is modeled based on climate, distance to known observations, and landscape intactness.",
-                         "We'll use this distribution to estimate the species' environmental tolerance, model gene flow among nearby populations, and hypothesize which populations may be adapted to the environment of the selected focal site.",
-                         "Or for a generic species-agnostic analysis of environmental similarity between sites, enter 'NONE' in the species box.<br><br>"),
+                              "Select a species to load its estimated California geographic range, which is modeled based on climate, distance to known observations, and landscape intactness.",
+                              "We'll use this distribution to estimate the species' environmental tolerance, model gene flow among nearby populations, and hypothesize which populations may be adapted to the environment of the selected focal site.",
+                              "Or for a generic species-agnostic analysis of environmental similarity between sites, enter 'NONE' in the species box.<br><br>"),
                          selectizeInput("allsp", "Full species list", choices = allspps), # not used server-side
                          easyClose = TRUE, footer = modalButton("Dismiss") )) })
       observeEvent(input$i_radius, 
@@ -259,7 +269,7 @@ server <- function(input, output, session) {
                    {showModal(modalDialog(
                          title="Limit to species range",
                          "Check this box to limit prospective planting sites to locations within the species' current modeled range.",
-                         "Uncheck it to consider all of California (which may be useful, e.g., if the modeled range omits areas where the species occurs).", 
+                         "Uncheck it to consider all of California, which may be useful if the modeled range omits areas where the species occurs, or as a means to explore where locations outside the current range could become suitable in the future.", 
                          easyClose = TRUE, footer = modalButton("Dismiss") )) })
       observeEvent(input$i_mode, 
                    {showModal(modalDialog(
@@ -277,6 +287,13 @@ server <- function(input, output, session) {
                    {showModal(modalDialog(
                          title = "Select a focal location",
                          "To choose a focal site, click the map or enter 'Lon, Lat' in the box and press ENTER.",
+                         easyClose = TRUE, footer = modalButton("Dismiss") )) })
+      
+      observeEvent(input$i_arrows, 
+                   {showModal(modalDialog(
+                         title = "Focal site",
+                         "The red arrows indicate projected climate change at the focal site for the selected era and emissions scenario, according to five different global climate models (GCMs).",
+                         "The large red point indicates the focal site's environment for the era listed in red above the plot, which is what is compared to other sites across the species range to calculate 'sigma'; for future time periods this is the average of the GCMs.",
                          easyClose = TRUE, footer = modalButton("Dismiss") )) })
       
       
@@ -320,7 +337,7 @@ server <- function(input, output, session) {
       ssp_sel <- reactiveValues(sel = "SSP585")
       observeEvent(input$ssp, { ssp_sel$sel <- c(ssp_sel$sel, ssps$ssp[ssps$text == input$ssp]) })
       
-      observe({
+      observe(priority = 10, {
             baseline <- as.character(input$time == "1981-2010")
             updateSelectInput(session, "ssp",
                               choices = switch(baseline, 
@@ -361,12 +378,29 @@ server <- function(input, output, session) {
             time <- input$time
             ssp <- ssps$ssp[ssps$text == input$ssp]
             if(time == times[1]) ssp <- ssps$ssp[1]
-            clim_mean <- stackBands(clim_files$path[clim_files$year==time & clim_files$ssp==ssp], 1) %>% rast()
-            clim_sd <- stackBands(clim_files$path[clim_files$year==time & clim_files$ssp==ssp], 2) %>% rast()
-            names(clim_mean) <- vars
-            names(clim_sd) <- vars
-            list(clim = clim_mean,
-                 clim_sd = clim_sd,
+            # browser()
+            # clim_mean <- stackBands(clim_files$path[clim_files$year==time & clim_files$ssp==ssp], 1) %>% rast() %>% setNames(vars)
+            # clim_sd <- stackBands(clim_files$path[clim_files$year==time & clim_files$ssp==ssp], 2) %>% rast()
+            # names(clim_mean) <- vars
+            # names(clim_sd) <- vars
+            
+            cf <- clim_files$path[clim_files$year==time & clim_files$ssp==ssp]
+            
+            clim <- stackBands(cf, 1) %>% rast() %>% setNames(vars)
+            
+            if(time == "1981-2010"){
+                  m1 <- m2 <- m3 <- m4 <- m5 <- clim
+            }else{
+                  m1 <- stackBands(cf, 2) %>% rast() %>% setNames(vars)
+                  m2 <- stackBands(cf, 3) %>% rast() %>% setNames(vars)
+                  m3 <- stackBands(cf, 4) %>% rast() %>% setNames(vars)
+                  m4 <- stackBands(cf, 5) %>% rast() %>% setNames(vars)
+                  m5 <- stackBands(cf, 6) %>% rast() %>% setNames(vars)
+            }
+            
+            list(clim = clim,
+                 m1 = m1, m2 = m2, m3 = m3, m4 = m4, m5 = m5,
+                 # clim_sd = clim_sd,
                  soil = soil_all)
       })
       
@@ -444,6 +478,7 @@ server <- function(input, output, session) {
       
       # climate differences
       clim_sigmas <- reactive({
+            if(input$time == "2041-2070") browser()
             x <- range_envt()$clim
             range_mean <- range_stats()$clim_mean
             range_sd <- range_stats()$clim_sd
@@ -539,8 +574,12 @@ server <- function(input, output, session) {
       
       output$scatter <- renderPlot({
             
-            # if(str_detect(input$color, "Change in")) browser()
+            req(final())
             
+            # if(input$mode == "collection") browser()
+            # if(input$time == "1981-2010") browser()
+            
+            # if(str_detect(input$color, "Change in")) browser()
             
             # future climate mean, and sd of either ensemble or niche
             avg <- c(target_envt()$focal$clim, target_envt()$focal$soil) %>% unlist()
@@ -552,7 +591,6 @@ server <- function(input, output, session) {
             vy <- all_vars$abbv[all_vars$desc == input$yvar]
             vc <- all_vars$abbv[all_vars$desc == input$color]
             
-            req(final())
             f <- final()
             if(vc == "rgb"){
                   d <- c(final(), rgb_raster())[[c(vx, vy, c("r", "g", "b"))]] %>% as.data.frame() %>% na.omit()
@@ -568,17 +606,11 @@ server <- function(input, output, session) {
             names(d) <- c("xvar", "yvar", "cvar")
             d <- d %>% sample_n(min(maxpoints, nrow(.)))
             
-            
             # vc <- all_vars[all_vars$desc == input$color, ]
             fill_col <- NA
             
-            
-            
-            
             x_label <- paste0(input$xvar, " ", all_vars$units[all_vars$desc == input$xvar])
             y_label <- paste(input$yvar, all_vars$units[all_vars$desc == input$yvar])
-            
-            
             
             # gcm uncertainty
             # gcmv <- gcm_var()
@@ -612,7 +644,7 @@ server <- function(input, output, session) {
                   limits <- c(ifelse(is.na(vci$min), minmax[1], vci$min), minmax[2])
                   if(str_detect(input$color, "Change in")) limits <- max(abs(minmax)) * c(-1, 1)
                   scatter <- scatter + 
-                        guides(color = guide_colorbar(barheight = 12)) +
+                        guides(color = guide_colorbar(barheight = unit(.8, "npc"))) +
                         scale_color_gradientn(colours = switch(vci$palette, 
                                                                "sigma" = sigma_pal, "viridis" = viridis_pal, "delta" = delta_pal), 
                                               limits = limits)
@@ -648,16 +680,36 @@ server <- function(input, output, session) {
             # coord_fixed(ratio = std[vx]/std[vy]) +
             
             
+            # arrows
             if(!grepl("plot", paste(vx, vy))){
                   req(scatter)
+                  
+                  # if(input$mode == "collection") browser()
+                  
+                  
+                  if(input$mode == "planting"){
+                        mods <- sapply(1:5, function(x) c(target_envt()$focal[[paste0("m", x)]], target_envt()$focal$soil) %>% unlist()) %>% t()
+                        orig <- ref %>% as.matrix() %>% t()
+                        dest <- mods
+                  }else{
+                        mods <- sapply(1:5, function(x) c(target_envt()$reference[[paste0("m", x)]], target_envt()$reference$soil) %>% unlist()) %>% t()
+                        orig <- mods
+                        dest <- avg %>% as.matrix() %>% t()
+                  }
+                  
                   scatter <- scatter +
-                        annotate("segment", color="black", linewidth = 1.5,
-                                 x=ref[vx], y=ref[vy], xend=avg[vx], yend=avg[vy],
-                                 arrow=grid::arrow(type="closed", angle=15, length=unit(.15, "in"),
+                        annotate("point", color = "black", size = 6, x = avg[vx], y = avg[vy]) +
+                        annotate("point", color = "red", size = 5, x = avg[vx], y = avg[vy])
+                  
+                  if(input$time != "1981-2010") scatter <- scatter +
+                        annotate("segment", color="black", linewidth = 1,
+                                 x=orig[,vx], y=orig[,vy], xend=dest[,vx], yend=dest[,vy],
+                                 arrow=grid::arrow(type="closed", angle=15, length=unit(.1, "in"),
                                                    ends = ifelse(input$mode == "collection", "first", "last"))) +
-                        annotate("segment", color="red", linewidth = 1,
-                                 x=ref[vx], y=ref[vy], xend=avg[vx], yend=avg[vy],
-                                 arrow=grid::arrow(type="closed", angle=15, length=unit(.15, "in"),
+                        annotate("point", color="red", size = .5, x=orig[vx], y=orig[vy]) +
+                        annotate("segment", color="red", linewidth = .3,
+                                 x=orig[,vx], y=orig[,vy], xend=dest[,vx], yend=dest[,vy],
+                                 arrow=grid::arrow(type="open", angle=15, length=unit(.1, "in"),
                                                    ends = ifelse(input$mode == "collection", "first", "last")))
             }
             
@@ -699,6 +751,15 @@ server <- function(input, output, session) {
                   writeRaster(final()$prob, file)
             }
       )
+      
+      # species list download
+      output$downloadSpp <- downloadHandler(
+            filename = "CA_native_vascular_plants.csv",
+            content = function(file) {
+                  write.csv(data.frame(species = allspps), file)
+            }
+      )
+      
       
 }
 

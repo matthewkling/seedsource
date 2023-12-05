@@ -52,7 +52,31 @@ for(y in unique(clim$year)){
       }
 }
 
-
+# collate individual models, plus mean (alternative to above)
+msk <- rast("assets/all_species/smooth/NONE 0.tif")[[1]]
+vars <- c("PPT", "PET", "AET", "CWD", "RAR", "DJF", "JJA")
+for(y in unique(clim$year)){
+      for(v in 1:7){
+            for(p in unique(clim$scenario)){
+                  
+                  paths <- clim$path[clim$year == y & clim$scenario == p]
+                  if(length(paths) == 0) next()
+                  s <- stackBands(paths, v)
+                  var <- vars[v]
+                  s <- s %>% crop(ext)
+                  
+                  if(var == "PPT") s <- log10(s)
+                  
+                  avg <- mean(s)
+                  # stdev <- calc(s, sd)
+                  s <- stack(avg, s)
+                  
+                  terra::writeRaster(terra::rast(s) %>% terra::crop(msk) %>% terra::mask(msk),
+                                     paste0("assets/models/ensemble ", y, " ", p, " ", var, ".tif"),
+                                     overwrite = T)
+            }
+      }
+}
 
 
 
