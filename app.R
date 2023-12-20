@@ -22,14 +22,6 @@ assets <- ifelse(dir.exists("assets/all_species"), "assets/all_species/", "asset
 
 # climate metadata
 vars <- sort(c("PPT", "AET", "CWD", "DJF", "JJA"))
-# clim_files <- data.frame(path=list.files("assets/climate",
-#                                          full.names=T, pattern="ensemble"),
-#                          stringsAsFactors=F) %>%
-#       mutate(set=gsub("\\.tif", "", basename(path))) %>%
-#       separate(set, c("junk", "year", "ssp", "var"), remove=F, sep=" ") %>%
-#       select(-junk) %>%
-#       mutate(ssp = ifelse(ssp == "NA", "historic", toupper(ssp))) %>%
-#       filter(var %in% vars) %>% arrange(var)
 clim_files <- data.frame(path = list.files("assets/models", full.names = T),
                          stringsAsFactors = F) %>%
       mutate(set = gsub("\\.tif", "", basename(path))) %>%
@@ -65,12 +57,14 @@ range_summaries <- readRDS("assets/range_stats.rds")
 
 ll <- crs("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
 
-all_vars <- data.frame(abbv = c(vars, paste0("soil_PC", 1:5), "clim_prob", "soil_prob", "prob", "rgb", paste0("d", vars)))
+all_vars <- data.frame(abbv = c(vars, paste0("soil_PC", 1:5), # "clim_prob", "soil_prob", 
+                                "prob", "rgb", paste0("d", vars)))
 all_vars$desc <- c("Actual evapotranspiration", "Climatic water deficit",
                    "Winter minimum temperature", "Summer maximum temperature",
                    "Annual precipitation",
                    "Soil PC1", "Soil PC2", "Soil PC3", "Soil PC4", "Soil PC5",
-                   "Climate sigma", "Soil sigma", "Combined sigma",
+                   # "Climate sigma", "Soil sigma", 
+                   "Sigma",
                    "Ordination",
                    paste0("Change in ", c("Actual evapotranspiration", "Climatic water deficit",
                                           "Winter minimum temperature", "Summer maximum temperature", "Annual precipitation")))
@@ -78,16 +72,17 @@ all_vars$units <- c("(mm)", "(mm)",
                     "(deg. C)", "(deg. C)",
                     "(log10 mm)",
                     rep("(SD)", 5),
-                    rep("(similarity to target, SD)", 3),
+                    rep("(similarity to target, SD)", 1),
                     "(similar colors have\nsimilar enviroments)",
                     "(mm)", "(mm)", "(deg. C)", "(deg. C)", "(log10 mm)")
-all_vars$min <- c(rep(NA, 10), rep(0, 3), NA, rep(NA, 5))
-all_vars$palette <- c(rep("viridis", 10), rep("sigma", 3), NA, rep("delta", 5))
+all_vars$min <- c(rep(NA, 10), rep(0, 1), NA, rep(NA, 5))
+all_vars$max <- c(rep(NA, 10), rep(5, 1), NA, rep(NA, 5))
+all_vars$palette <- c(rep("viridis", 10), rep("sigma", 1), NA, rep("delta", 5))
 
 sigma <- function(x, site_mean){
-      z <- sqrt(sum((x - site_mean)^2))
+      z <- sum((x - site_mean)^2)
       z[] <- sqrt(qchisq(pchisq(z[], length(site_mean)), 1))
-      classify(z, matrix(c(10, Inf, 10), nrow = 1))
+      z
 }
 
 
@@ -106,6 +101,7 @@ $(document).on("keyup", function(e) {
   }
 });
 '
+
 
 ui <- navbarPage("Seeds of Change [BETA]",
                  fluid = TRUE,
@@ -166,8 +162,8 @@ ui <- navbarPage("Seeds of Change [BETA]",
                                        ),
                                        column(4,
                                               selectizeInput("color", "Color variable", 
-                                                             all_vars$desc[c(13:11, 14, 1:10, 15:19)], 
-                                                             all_vars$desc[13])
+                                                             all_vars$desc[c(11, 12, 1:10, 13:17)], 
+                                                             all_vars$desc[11])
                                        )
                                  ),
                                  hr(),
@@ -217,7 +213,7 @@ server <- function(input, output, session) {
             easyClose = TRUE, footer = modalButton("Dismiss")
       ))
       
-      observeEvent(input$i_species, 
+      observeEvent(input$i_species,
                    {showModal(modalDialog(
                          title="Species",
                          HTML("The tool comes pre-loaded with estimated geographic range maps for most California native plant species (only 25 species important for Bay Area restoration projects are included in this beta version, but all 5221 species listed below will ultimately be added).",
@@ -250,14 +246,6 @@ server <- function(input, output, session) {
                          br(), "SSP3-7.0 - regional imbalance, no additional policies, high greenhouse gas emissions, doubling 2020 to 2100, global average temperature increase in year 2100 ~3.6 deg. C (range 2.8-4.6 deg. C) above pre-industrial",
                          br(), "SSP5-8.5 - fossil fuel-intensive development, very high greenhouse gas emissions, doubling 2020 to 2050, global average temperature increase in year 2100 ~4.4 deg. C (range 3.3-5.7 deg. C) above pre-industrial",
                          easyClose = TRUE, footer = modalButton("Dismiss") )) })
-      # observeEvent(input$i_basis, 
-      #              {showModal(modalDialog(
-      #                    title="Climate distance metric",
-      #                    "The climatic difference 'sigma' between the planting site and each source population is expressed as a number of standard deviations.", 
-      #                    "You can select whether this is based on variation among climate models, in which case sigma reflects the likelihood of a future climate match,",
-      #                    "or on variation across the species California range, in which case sigma reflects difference in terms of realized niche breadth.",
-      #                    "(Note that soil similarity is always calculated using the range method.)",
-      #                    easyClose = TRUE, footer = modalButton("Dismiss") )) })
       observeEvent(input$i_weight, 
                    {showModal(modalDialog(
                          title="Soils versus climate",
@@ -297,15 +285,6 @@ server <- function(input, output, session) {
                          easyClose = TRUE, footer = modalButton("Dismiss") )) })
       
       
-      
-      # txt2html <- function(x){
-      #       rawText <- readLines(x)
-      #       splitText <- stringi::stri_split(str = rawText, regex = '\\n')
-      #       replacedText <- lapply(splitText, shiny::p)
-      #       return(replacedText)
-      # }
-      # output$instructions <- renderUI({ txt2html("assets/instructions") })
-      # output$about <- renderUI({ txt2html("assets/about") })
       
       
       
@@ -378,11 +357,6 @@ server <- function(input, output, session) {
             time <- input$time
             ssp <- ssps$ssp[ssps$text == input$ssp]
             if(time == times[1]) ssp <- ssps$ssp[1]
-            # browser()
-            # clim_mean <- stackBands(clim_files$path[clim_files$year==time & clim_files$ssp==ssp], 1) %>% rast() %>% setNames(vars)
-            # clim_sd <- stackBands(clim_files$path[clim_files$year==time & clim_files$ssp==ssp], 2) %>% rast()
-            # names(clim_mean) <- vars
-            # names(clim_sd) <- vars
             
             cf <- clim_files$path[clim_files$year==time & clim_files$ssp==ssp]
             
@@ -432,14 +406,6 @@ server <- function(input, output, session) {
             return(y)
       })
       
-      # gcm_var <- reactive({
-      #       x <- smoothed_envt()$clim[[1]]
-      #       ss <- sample_n(as.data.frame(rasterToPoints(x)), 10)[,1:2]
-      #       coordinates(ss) <- c("x", "y")
-      #       crs(ss) <- ll
-      #       ss <- rbind(ss, site$point)
-      #       future_envt() %>% map(extract, y = ss)
-      # })
       
       # target environment at selected site (future if planting mode)
       target_envt <- reactive({
@@ -466,34 +432,50 @@ server <- function(input, output, session) {
                  soil_sd = y$sd[1:5])
       })
       
-      # soil differences
-      soil_sigmas <- reactive({
-            x <- range_envt()$soil
-            range_mean <- range_stats()$soil_mean
-            range_sd <- range_stats()$soil_sd
+      # # soil differences
+      # soil_sigmas <- reactive({
+      #       x <- range_envt()$soil
+      #       range_mean <- range_stats()$soil_mean
+      #       range_sd <- range_stats()$soil_sd
+      #       x <- (x - range_mean) / range_sd
+      #       site_mean <- (unlist(target_envt()$focal$soil) - range_mean) / range_sd
+      #       sigma(x, site_mean)
+      # })
+      # 
+      # # climate differences
+      # clim_sigmas <- reactive({
+      #       if(input$time == "2041-2070") browser()
+      #       x <- range_envt()$clim
+      #       range_mean <- range_stats()$clim_mean
+      #       range_sd <- range_stats()$clim_sd
+      #       x <- (x - range_mean) / range_sd
+      #       site_mean <- (unlist(target_envt()$focal$clim) - range_mean) / range_sd
+      #       sigma(x, site_mean)
+      # })
+      
+      sigmas <- reactive({
+            x <- c(range_envt()$clim, range_envt()$soil)
+            range_mean <- c(range_stats()$clim_mean, range_stats()$soil_mean)
+            pc <- input$pclim / 100
+            # scl <- sqrt(c(pc, 1-pc)) / mean(sqrt(c(pc, 1-pc)))
+            scl <- sqrt(c(pc, 1-pc)*2)
+            range_sd <- c(range_stats()$clim_sd, range_stats()$soil_sd) / rep(scl, each = 5)
             x <- (x - range_mean) / range_sd
-            site_mean <- (unlist(target_envt()$focal$soil) - range_mean) / range_sd
+            site_mean <- (unlist(c(target_envt()$focal$clim, target_envt()$focal$soil)) - range_mean) / range_sd
             sigma(x, site_mean)
       })
       
-      # climate differences
-      clim_sigmas <- reactive({
-            if(input$time == "2041-2070") browser()
-            x <- range_envt()$clim
-            range_mean <- range_stats()$clim_mean
-            range_sd <- range_stats()$clim_sd
-            x <- (x - range_mean) / range_sd
-            site_mean <- (unlist(target_envt()$focal$clim) - range_mean) / range_sd
-            sigma(x, site_mean)
-      })
       
       # overall dissimilarity combining soil and climate
       final <- reactive({
-            pc <- input$pclim / 100
-            req(clim_sigmas(), soil_sigmas())
-            prob <- (clim_sigmas() * pc) + (soil_sigmas() * (1-pc))
-            d <- c(range_envt()$clim, range_envt()$soil, clim_sigmas(), soil_sigmas(), prob)
-            names(d) <- all_vars$abbv[1:13]
+            # pc <- input$pclim / 100
+            # req(clim_sigmas(), soil_sigmas())
+            req(sigmas(), range_envt())
+            # prob <- (clim_sigmas() * pc) + (soil_sigmas() * (1-pc)) * 2
+            # d <- c(range_envt()$clim, range_envt()$soil, clim_sigmas(), soil_sigmas(), prob)
+            prob <- classify(sigmas(), matrix(c(5, Inf, 5), nrow = 1))
+            d <- c(range_envt()$clim, range_envt()$soil, prob)
+            names(d) <- all_vars$abbv[1:11]
             if(!is.null(deltas())) d <- c(d, deltas())
             return(d)
       })
@@ -530,7 +512,7 @@ server <- function(input, output, session) {
       
       output$map <- renderLeaflet({
             leaflet() %>%
-                  setView(lng=coordinates(s)[1], lat=coordinates(s)[2], zoom=9) %>%
+                  setView(lng=coordinates(s)[1], lat=coordinates(s)[2], zoom=7) %>%
                   addProviderTiles(providers$Esri.WorldGrayCanvas)
       })
       
@@ -539,12 +521,14 @@ server <- function(input, output, session) {
                   message = "Stand by.", 
                   value = 0, 
                   {
-                        incProgress(.25, detail = "Computing climate similarities.")
-                        x <- clim_sigmas()
-                        incProgress(.5, detail = "Computing soil similarities.")
-                        x <- soil_sigmas()
+                        # incProgress(.25, detail = "Computing climate similarities.")
+                        # x <- clim_sigmas()
+                        # incProgress(.5, detail = "Computing soil similarities.")
+                        # x <- soil_sigmas()
+                        incProgress(.25, detail = "Computing environmental similarities.")
+                        req(sigmas())
                         
-                        incProgress(.75, detail = "Merging dimensions.")
+                        # incProgress(.75, detail = "Merging dimensions.")
                         
                         v <- all_vars[all_vars$desc == input$color, ]
                         f <- final()
@@ -559,7 +543,7 @@ server <- function(input, output, session) {
                                     addAwesomeMarkers(lng=latlon[1], lat=latlon[2], icon=icon)
                         }else{
                               r <- f[[v$abbv]]
-                              limits <- range(c(v$min, values(r)), na.rm = T)
+                              limits <- range(c(v$min, v$max, values(r)), na.rm = T)
                               if(str_detect(input$color, "Change in")) limits <- max(abs(values(r)), na.rm = T) * c(-1, 1)
                               pal <- colorNumeric(switch(v$palette, "sigma" = sigma_pal, "viridis" = viridis_pal, "delta" = delta_pal),
                                                   limits,
@@ -575,11 +559,6 @@ server <- function(input, output, session) {
       output$scatter <- renderPlot({
             
             req(final())
-            
-            # if(input$mode == "collection") browser()
-            # if(input$time == "1981-2010") browser()
-            
-            # if(str_detect(input$color, "Change in")) browser()
             
             # future climate mean, and sd of either ensemble or niche
             avg <- c(target_envt()$focal$clim, target_envt()$focal$soil) %>% unlist()
@@ -612,19 +591,6 @@ server <- function(input, output, session) {
             x_label <- paste0(input$xvar, " ", all_vars$units[all_vars$desc == input$xvar])
             y_label <- paste(input$yvar, all_vars$units[all_vars$desc == input$yvar])
             
-            # gcm uncertainty
-            # gcmv <- gcm_var()
-            # bubbles <- tibble(x = gcmv$clim[,vx],
-            #                   y = gcmv$clim[,vy],
-            #                   xsd = gcmv$clim_sd[,vx],
-            #                   ysd = gcmv$clim_sd[,vy],
-            #                   group = 1:length(x)) %>%
-            #       expand_grid(id = 1:100,
-            #                   sd = 1:2) %>%
-            #       mutate(dx = cos(seq(0,2*pi,length.out=100))[id],
-            #              dy = sin(seq(0,2*pi,length.out=100))[id]) %>%
-            #       mutate(x = x + xsd * dx * sd,
-            #              y = y + ysd * dy * sd)
             
             # plot
             req(d, vc)
@@ -641,7 +607,8 @@ server <- function(input, output, session) {
                         guides(color = guide_colorsteps()) +
                         scale_color_identity()
             }else{
-                  limits <- c(ifelse(is.na(vci$min), minmax[1], vci$min), minmax[2])
+                  limits <- c(ifelse(is.na(vci$min), minmax[1], vci$min), 
+                              ifelse(is.na(vci$max), minmax[2], vci$max))
                   if(str_detect(input$color, "Change in")) limits <- max(abs(minmax)) * c(-1, 1)
                   scatter <- scatter + 
                         guides(color = guide_colorbar(barheight = unit(.8, "npc"))) +
@@ -649,35 +616,6 @@ server <- function(input, output, session) {
                                                                "sigma" = sigma_pal, "viridis" = viridis_pal, "delta" = delta_pal), 
                                               limits = limits)
             }
-            
-            
-            
-            # geom_polygon(data = bubbles, aes(x, y, group = paste(group, sd)),
-            #              color = "black", fill = NA) + 
-            
-            # annotate("linerange", color="red", size=.5,
-            #          x=avg[vx], 
-            #          ymin=avg[vy] + std[vy]*c(-.5, .5), 
-            #          ymax=avg[vy] + std[vy]*c(-2.5, 2.5)) +
-            # annotate("segment", color="red", size=.5,
-            #          y=avg[vy], yend=avg[vy], 
-            #          x=avg[vx] + std[vx]*c(-.5, .5), 
-            #          xend=avg[vx] + std[vx]*c(-2.5, 2.5)) +
-            
-            # annotate("point", color="red", shape=3, size=8,
-            #          x=avg[vx], y=avg[vy]) +
-            # annotate("polygon", color="red", fill=fill_col, size=.5,
-            #          x=avg[vx] + std[vx] * cos(seq(0,2*pi,length.out=100)),
-            #          y=avg[vy] + std[vy] * sin(seq(0,2*pi,length.out=100))) +
-            # annotate("polygon", color="red", fill=fill_col, size=.5,
-            #          x=avg[vx] + std[vx]*2 * cos(seq(0,2*pi,length.out=100)),
-            #          y=avg[vy] + std[vy]*2 * sin(seq(0,2*pi,length.out=100))) +
-            # annotate("segment", color="black",
-            #          x=ref[vx], y=ref[vy], xend=avg[vx], yend=avg[vy],
-            #          arrow=grid::arrow(type="closed", angle=15, length=unit(.15, "in"),
-            #                            ends = ifelse(input$time == "1981-2010", "first", "last"))) +
-            
-            # coord_fixed(ratio = std[vx]/std[vy]) +
             
             
             # arrows
