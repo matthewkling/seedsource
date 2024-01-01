@@ -14,7 +14,7 @@ The goal of estimating the historic environment that a population inhabited and 
 
 2.  Next, select a focal site ***location*** by clicking the map or entering a longitude and latitude in the input box.
 
-3.  Also use the dropdown to select the ***focal site activity***, i.e. whether the site is a planting or collection location.
+3.  Also use the dropdown to select the ***focal site activity***, i.e. whether the focal site is a planting or collection location.
 
 4.  Additional options include the future ***time period*** and emission ***scenario***, the ***smoothing radius*** that defines the scale of environmental smoothing applied to the historic data as discussed above, and the relative weight assigned to ***soil versus climate*** variables. These options can be set based on the particulars of your study species and use case, or they can be iteratively changed to explore the sensitivity of outputs to these choices.
 
@@ -24,26 +24,20 @@ Click the **[?]** symbol next to a setting for additional information.
 
 #### INTERPRETING RESULTS:
 
-Results for a given set of model inputs are displayed on the map and scatterplot (which has a point for every 1 km grid cell on the map). The dropdown menus below the scatterplot can be used to change which output variables are displayed on the ***x*** and ***y*** dimensions of the scatterplot, and which variable is shown in ***color*** on the map and scatterplot. See below for descriptions of the variables.
+Results for a given set of model inputs are displayed on the map and scatter plot (which has a point for every 1 km grid cell on the map). The dropdown menus below the scatter plot can be used to change which output variables are displayed on the ***x*** and ***y*** dimensions of the scatter plot, and which variable is shown in ***color*** on the map and scatter plot. See below for descriptions of the variables.
 
-The scatterplot includes an arrow indicating projected changes in the focal site's climate over time.
+The scatter plot includes an arrow indicating projected changes in the focal site's climate over time.
 
--   ***Sigma***: This is a measure of how different a location's environment is from the target site. This is the default variable represented by color. Sigma is a multidimensional z-score, representing the equivalent to how many one-dimensional standard deviations away from the focal site's environment a location is. The standard deviation is defined based on historic spatial variation across the species range. Users can view a combined version of sigma representing the mix of climate and soil defined on the input slider, or can view versions based solely on climate or soil.\
+-   ***Environmental difference***: This is a measure of how different a location's environment is from the target site. This is the default variable represented by color. Sigma is a multidimensional z-score, representing the equivalent to how many one-dimensional standard deviations away from the focal site's environment a location is. The standard deviation is defined based on historic spatial variation across the species range. Users can view a combined version of sigma representing the mix of climate and soil defined on the input slider, or can view versions based solely on climate or soil.\
     ![illustration of sigma statistic](images/sigma-01.jpg){alt="illustration of sigma statistic" width="600"}
 
 -   ***Climate variables***: The tool is based on 5 climate variables that are broadly relevant to the distribution and function of plants in California. These can be used as scatterplot axes as well as color variables, helping users to explore patterns of environmental variation across species ranges. The climate data used here are from [CHELSA](https://chelsa-climate.org/).
 
 -   ***Soil principal components***: Soil similarity is based on a large number of chemical and physical soil variables relevant to plants, reduced to 5 uncorrelated dimensions via a principal component analysis. These principal components (PC) can be used as scatterplot dimensions and as color variables. Documentation will be added providing further detail about the particular soil properties associated with each PC. The soil data used here are from [SoilGrids](https://www.isric.org/explore/soilgrids).
 
--   ***Ordination***: This feature helps to visualize patterns of environmental variation across a species' range by using similar colors for sites with similar environments. This variable is not specific to the focal site and is based only on historic climate and soil (weighted based on the soil-climate slider). [NOTE: at last check this feature was not working properly on the web server currently hosting the application.]
+-   ***Seed zones***: This feature helps to visualize patterns of environmental variation across a species' range by clustering sites with similar climate and soil characteristics into discrete groups or zones across a species range. Use the slider to select the desired number of clusters.
 
 -   ***Change in climate***: For each climate variable, users can also select the projected amount of climate change as a color variable. This represents the mean predicted change for an ensemble of 5 GCMs for the selected time period and SSP, relative to the baseline time period. No spatial smoothing is applied to these variables.
-
-#### EXAMPLES:
-
--   ***Identifying potential collection sites***: The default settings that load when the app is initialized give an example geared toward identifying potential seed collection sites for coast live oak (Quercus agrifolia) to be planted at a focal site in San Francisco. The range model for this species estimates that it is relatively likely to be present in sites colored on the map. Sites colored in red (e.g. inland north of Santa Cruz and on the Big Sur coast) have (moderately-smoothed) historic environments similar to the planting site's projected late-21st century (2071-2100) environment under a high-emissions scenario (SSP5-8.5), potentially making them suitable as seed collection sites. The arrow on the scatterplot indicates that both climatic water deficit (CWD) and actual evapotranspiration (AET) are projected to increase at the focal site.
-
--   Identifying potential planting sites: [Forthcoming.]
 
 #### CAVEATS:
 
