@@ -109,7 +109,7 @@ $(document).on("keyup", function(e) {
 '
 
 
-ui <- navbarPage("Seeds of Change [BETA]",
+ui <- navbarPage(title = span("Seeds of Change [BETA]", style="color: black; font-weight: bold"),
                  fluid = TRUE,
                  selected = "Home",
                  tags$script(js),
@@ -416,6 +416,7 @@ server <- function(input, output, session) {
                         "planting" = smoothed_envt(),
                         "seed collection" = future_envt() )
             if(input$mode == "seed collection"){
+                  req(input$constrain)
                   if(!is.null(input$constrain)){
                         if(input$constrain) y <- y %>%
                                     map(crop, y = smoothed_envt()[[1]][[1]]) %>%
@@ -471,11 +472,9 @@ server <- function(input, output, session) {
             x <- c(range_envt()$clim, range_envt()$soil)
             f <- values(x)
             a <- which(is.finite(rowSums(f)))
-            v <- scale(na.omit(f))
+            v <- scale(f[a,])
             w <- sqrt(rep(c(input$pclim / 100, 1-(input$pclim / 100)), each = nlyr(x)/2)*2)
-            v <- v * w
-            # v[,1:5] <- v[,1:5] * scl()[1]
-            # v[,6:10] <- v[,6:10] * scl()[2]
+            for(i in 1:ncol(v)) v[,i] <- v[,i] * w[i]
             set.seed(1)
             clust <- kmeans(v, k())
             y <- x[[1]] %>% setValues(NA) %>% setNames("clust")
